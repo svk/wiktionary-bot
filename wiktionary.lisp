@@ -358,26 +358,6 @@
 	  :from-end t))
 
 (defun simplify-html (cell)
-  (labels ((strippable? (tag)
-	     (find (car tag) '(:strong :span))))
-    (if (stringp cell)
-	(substitute #\space #\newline cell)
-	(if (not (listp cell))
-	    cell
-	    (let ((contents (merge-adjacent-strings 
-			      (mapcar #'simplify-html
-				      (remove-if-not
-				       #'identity
-				       (if (keywordp (car cell))
-					   (cddr cell)
-					   cell))))))
-	      (format t "contents are ~a~%" contents)
-	      (if (or (keywordp (car cell))
-		      (strippable? cell))
-		  contents
-		  `(,(car cell) nil ,@contents)))))))
-
-(defun simplify-html-2 (cell)
   (cond ((and (consp cell)
 	      (keywordp (car cell)))
 	 (collecting 
@@ -393,7 +373,7 @@
   (mapcar #'trim-if-string
 	  (merge-adjacent-strings
 	   (apply #'nconc
-		  (remove-if-not #'identity (mapcar #'simplify-html-2 cells))))))
+		  (remove-if-not #'identity (mapcar #'simplify-html cells))))))
 
 (defun trim-if-string (cell)
   (if (stringp cell)
