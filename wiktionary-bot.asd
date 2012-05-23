@@ -3,6 +3,7 @@
 	       #:cl-utilities
 	       #:drakma
 	       #:cl-json
+	       #:cl-ppcre
 	       #:closure-html)
   :serial t
   :components

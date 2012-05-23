@@ -5,6 +5,7 @@
 
 (defvar *cookies* (make-instance 'drakma:cookie-jar))
 
+
 (defun read-login-info (&optional (filename #p"./data/bot-login.info"))
   (let ((*read-eval* nil))
     (with-open-file (f filename :direction :input)
@@ -26,25 +27,29 @@
 	  parameters
 	  :want-stream t
 	  http-request-args)))
-		    
+		  
+(defun parse-html (html)
+  (chtml:parse html (chtml:make-lhtml-builder)))
 
 (defun fetch-lhtml (url parameters &rest http-request-args)
-  (chtml:parse (apply #'drakma-request
-		      parameters
-		      url
-		      http-request-args)
-	       (chtml:make-lhtml-builder)))
+  (parse-html (apply #'drakma-request
+		     parameters
+		     url
+		     http-request-args)))
 
 (defun lhtml-matches? (tag &key name id class)
-  (and (or (null name)
-	   (eq (car tag) name))
-       (or (null id)
-	   (equalp (cadr (assoc :id (cadr tag)))
-		   id))
-       (or (null class)
-	   (find class
-		 (split-sequence #\space (cadr (assoc :class (cadr tag))))
-		 :test #'equalp))))
+  (labels ((ok (x) (find x
+			 (split-sequence #\space (cadr (assoc :class (cadr tag))))
+			 :test #'equalp)))
+    (and (or (null name)
+	     (eq (car tag) name))
+	 (or (null id)
+	     (equalp (cadr (assoc :id (cadr tag)))
+		     id))
+	 (or (null class)
+	     (if (listp class)
+		 (every #'ok class)
+		 (ok class))))))
 
 (defun lhtml-select (root &key name id class list)
   (if (or (null root)
@@ -80,6 +85,9 @@
 	((listp x) (string-join "|" (mapcar #'to-url-part x)))
 	(t (error (format nil "not sure how to encode ~a" x)))))
 
+(defun temporary-error (type &optional atom)
+  (error (format nil "temporary errors not yet implemented: ~a, ~a" type atom)))
+
 (defun remove-keyword-parameter (parameter parameter-list)
   (collecting
     (do* ((rest parameter-list)
@@ -108,12 +116,17 @@
     (do* ((rest parameters)
 	  (keyword (pop rest) (pop rest))
 	  (value (pop rest) (pop rest)))
-	 ((or (null keyword)
-	      (null value))
+	 ((and (or (null keyword)
+		   (null value))
+	       (null rest))
 	  (when keyword
 	    (error "odd number of keyword parameters")))
-      (collect (cons (to-url-part keyword)
-		     (to-url-part value))))))
+      (cond ((eq value nil))
+	    ((eq value t)
+	     (collect (cons (to-url-part keyword) "")))
+	    (t
+	     (collect (cons (to-url-part keyword)
+			    (to-url-part value))))))))
 
 (defun fetch-wiki-page (word)
   (fetch-lhtml (build-wiki-url word) nil))
@@ -166,9 +179,10 @@
 	 :action :query
 	 args))
 
-(defun api-revisions (titles &key (prop '("content")))
+(defun api-revisions (titles &key (prop '("content")) parse)
   (api-query :prop :revisions
 	     :titles titles
+	     :rvparse parse
 	     :rvprop prop))
 
 (defun api-expandtemplates (text)
@@ -187,7 +201,178 @@
 		(t (error (format nil "unable to extract with element ~a" element))))))
   structure)
 
+(defun expand-templates (text)
+  (extract '(:expandtemplates :*)
+	   (api-expandtemplates text)))
+
+(defun expand-templates-on-page (title text)
+  (extract '(:expandtemplates :*)
+	   (api-get :action :expandtemplates
+		    :title title
+		    :text text)))
+
 (defun page-source (title)
   (extract (list :query :pages #'cdar :revisions 0 :*)
 	   (api-revisions title
 			  :prop "content")))
+
+(defun page-rendered (title)
+  (parse-html (extract (list :query :pages #'cdar :revisions 0 :*)
+		       (api-revisions title
+				      :parse t
+				      :prop "content"))))
+
+(defun parse-simple-bullet-list (markup)
+  (remove-if #'(lambda (x) (equal x ""))
+	     (mapcar #'trim
+		     (split-sequence #\* markup))))
+
+(defparameter *disable-all-caching* nil) ;;careful!
+
+(defmacro def-simple-cached (name &body body)
+  (let ((cache-sym (gensym "CACHE")))
+    `(let ((,cache-sym))
+       (defun ,name (&key (force *disable-all-caching*))
+	 (or (and (not force) ,cache-sym)
+	     (setf ,cache-sym
+		   (progn ,@body)))))))
+
+(def-simple-cached swedish-blessed-grammar-templates
+  (let ((*wiktionary-language* "sv"))
+    (parse-simple-bullet-list
+     (expand-templates "{{Wiktionary:Användare/Robotar/Godkända_grammatikmallar}}"))))       
+
+(defun create-regexes-from-template-names (template-names)
+  (loop
+     :for template-name :in template-names
+     :collect
+     (list #+segfaults
+	   (cl-ppcre:create-scanner (concatenate 'string
+						 "{{"
+						 template-name
+						 "(|.*?)}}"))
+	   #'(lambda (string)
+	       (cl-ppcre:scan (concatenate 'string
+					   "{{"
+					   template-name
+					   "(\\\||}})")
+			      string))
+	   (concatenate 'string
+			"template-"
+			template-name))))
+
+(defun scan-for-grammar-tables (regex-list page)
+  (let ((before (page-source page))
+	(rendered (page-rendered page))
+	(after (page-source page)))
+    (when (not (equal before after))
+      (temporary-error :edited-during-scan page))
+    (collecting 
+      (dolist (element regex-list)
+	(destructuring-bind (scanner class)
+	    element
+	  (when (funcall scanner after)
+	    (let ((tables (lhtml-select rendered :name :table :class (list class "grammar") :list t)))
+	      (format t "tables len ~a~%" (length tables))
+	      (when (eql (length tables) 1)
+		(collect (car tables))))))))))
+
+(defun layout-table (table)
+  (let ((no-cols)
+	(no-rows))
+    (values
+     (collecting
+       (let ((ht (make-hash-table :test #'equal)))
+	 (labels ((cell? (x) (or (eq (car x) :th)
+				 (eq (car x) :td)))
+		  (row? (x) (eq (car x) :tr))
+		  (tag-colspan (tag)
+		    (let ((x (cadr (assoc :colspan (cadr tag)))))
+		      (if (null x)
+			  1
+			  (parse-integer x))))
+		  (tag-rowspan (tag)
+		    (let ((x (cadr (assoc :rowspan (cadr tag)))))
+		      (if (null x)
+			  1
+			  (parse-integer x))))
+		  (parse-cell (col col-span row row-span element)
+		    (loop
+		       :until (not (gethash (cons col row) ht))
+		       :do (incf col))
+		    (loop
+		       :for x :from col :to (1- (+ col col-span))
+		       :do
+		       (loop
+			  :for y :from row :to (1- (+ row row-span))
+			  :do (setf (gethash (cons x y) ht) t)
+			  :do (collect (list x y element))))
+		    (+ col col-span))
+		  (parse-row (row elements)
+		    (let ((col 0))
+		      (dolist (cell (remove-if-not #'cell? elements))
+			(setf col (parse-cell col
+					      (tag-colspan cell)
+					      row
+					      (tag-rowspan cell)
+					      (cddr cell))))))
+		  (parse-rows (elements)
+		    (let ((row 0))
+		      (dolist (cell (remove-if-not #'row? elements))
+			(parse-row row (cddr cell))
+			(incf row (tag-rowspan cell))))))
+	   (parse-rows (cddr (lhtml-select table :name :tbody)))
+	   (let* ((keys (hash-table-keys ht))
+		  (cols (reduce #'max (mapcar #'car keys)))
+		  (rows (reduce #'max (mapcar #'cdr keys))))
+	     (setf no-cols (1+ cols)
+		   no-rows (1+ rows))))))
+     no-cols
+     no-rows)))
+
+(defun visualize-table (values cols rows)
+  (let ((xs)
+	(arr (make-array (list rows cols))))
+    (labels ((visual-value-of (x)
+	       (1+ (or (position x xs)
+		       (1- (length (setf xs (append xs (list x)))))))))
+      (dotimes (row rows)
+	(dotimes (col cols)
+	  (setf (aref arr row col)
+		(visual-value-of (caddr (find (cons col row)
+					      values
+					      :key #'(lambda (z) (cons (car z) (cadr z)))
+					      :test #'equal))))))
+      arr)))
+
+
+	      
+
+(defun merge-adjacent-strings (things)
+  (reduce #'(lambda (a b)
+	      (if (and (stringp a)
+		       (stringp (first b)))
+		  (cons (concatenate 'string a (first b)) (rest b))
+		  (cons a b)))
+	  (append things (list nil))
+	  :from-end t))
+
+(defun simplify-html (cell)
+  (labels ((strippable? (tag)
+	     (find (car tag) '(:strong :span))))
+    (if (stringp cell)
+	(substitute #\space #\newline cell)
+	(if (listp (car cell))
+	    (mapcar #'simplify-html cell )
+	    (let ((contents (merge-adjacent-strings 
+			     (remove-if-not
+			      #'identity
+			      (mapcar #'simplify-html (cddr cell))))))
+	      (if (strippable? cell)
+		  contents
+		  `(,(car cell) nil ,@contents)))))))
+
+(defun trim-if-string (cell)
+  (if (stringp cell)
+      (trim cell)
+      cell))
