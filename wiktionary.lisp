@@ -362,17 +362,47 @@
 	     (find (car tag) '(:strong :span))))
     (if (stringp cell)
 	(substitute #\space #\newline cell)
-	(if (listp (car cell))
-	    (mapcar #'simplify-html cell )
+	(if (not (listp cell))
+	    cell
 	    (let ((contents (merge-adjacent-strings 
-			     (remove-if-not
-			      #'identity
-			      (mapcar #'simplify-html (cddr cell))))))
-	      (if (strippable? cell)
+			      (mapcar #'simplify-html
+				      (remove-if-not
+				       #'identity
+				       (if (keywordp (car cell))
+					   (cddr cell)
+					   cell))))))
+	      (format t "contents are ~a~%" contents)
+	      (if (or (keywordp (car cell))
+		      (strippable? cell))
 		  contents
 		  `(,(car cell) nil ,@contents)))))))
+
+(defun simplify-html-2 (cell)
+  (cond ((and (consp cell)
+	      (keywordp (car cell)))
+	 (collecting 
+	   (loop
+	      :for element :in (mapcar #'simplify-html-2 (cddr cell))
+	      :do
+	      (loop :for x :in element :do (collect x)))))
+	((stringp cell)
+	 (list cell))
+	(t nil)))
+
+(defun simplify-cells (cells)
+  (mapcar #'trim-if-string
+	  (merge-adjacent-strings
+	   (apply #'nconc
+		  (remove-if-not #'identity (mapcar #'simplify-html-2 cells))))))
 
 (defun trim-if-string (cell)
   (if (stringp cell)
       (trim cell)
       cell))
+
+(defun find-textual-cell-contents (cells)
+  (and (not (lhtml-select (list* :virtual nil cells) :name :a))
+       (simplify-cells cells)))
+
+(defun find-link-cell-contents (cells)
+  (lhtml-select (list* :virtual nil cells) :name :a))
