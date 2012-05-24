@@ -246,20 +246,24 @@
   (loop
      :for template-name :in template-names
      :collect
-     (list #+segfaults
-	   (cl-ppcre:create-scanner (concatenate 'string
-						 "{{"
-						 template-name
-						 "(|.*?)}}"))
-	   #'(lambda (string)
-	       (cl-ppcre:scan (concatenate 'string
-					   "{{"
-					   template-name
-					   "(\\\||}})")
-			      string))
-	   (concatenate 'string
-			"template-"
-			template-name))))
+     (list 
+      (let ((regex (concatenate 'string
+					    "{{"
+					    (cl-ppcre:regex-replace-all
+					     "([()])"
+					     template-name
+					     "\\\\\\1")
+					    "(|.*?)}}")))
+	#+still-segfaults
+	(cl-ppcre:create-scanner regex)
+	#'(lambda (string)
+	    (cl-ppcre:scan regex string)))
+      (concatenate 'string
+		   "template-"
+		   template-name))))
+
+(def-simple-cached swedish-grammar-table-regexes
+  (create-regexes-from-template-names (swedish-blessed-grammar-templates)))
 
 (defun scan-for-grammar-tables (regex-list page)
   (let ((before (page-source page))
@@ -273,7 +277,6 @@
 	    element
 	  (when (funcall scanner after)
 	    (let ((tables (lhtml-select rendered :name :table :class (list class "grammar") :list t)))
-	      (format t "tables len ~a~%" (length tables))
 	      (when (eql (length tables) 1)
 		(collect (car tables))))))))))
 
@@ -386,3 +389,59 @@
 
 (defun find-link-cell-contents (cells)
   (lhtml-select (list* :virtual nil cells) :name :a))
+
+(defun select-layouted-cell (cells x y)
+  (caddr (find (list x y) cells :test #'equal :key (papply (first-n ? 2)))))
+
+(defun lhtml->text-list (elements)
+  (cond ((listp elements)
+	 (if (keywordp (car elements))
+	     (destructuring-bind (tag attrs . rest)
+		 elements
+	       (declare (ignore tag attrs))
+	       (lhtml->text-list rest))
+	     (apply #'nconc
+		    (mapcar #'lhtml->text-list elements))))
+	((stringp elements) (list elements))
+	(t)))
+
+(defun lhtml->text (elements)
+  (apply #'concatenate
+	 'string
+	 (lhtml->text-list elements)))
+
+(defmacro def-table-recognizer (name value-map-f table-rows)
+  (let* ((table-height (length table-rows))
+	 (table-width (length (car table-rows)))
+	 (checks)
+	 (targets))
+    (loop
+       :for row :in table-rows
+       :for y :from 0
+       :do
+       (loop
+	  :for col :in row
+	  :for x :from 0
+	  :do
+	  (cond ((null col))
+		((stringp col)
+		 (push (list x y col) checks))
+		(t
+		 (push (list x y col) targets)))))
+    (assert (every (compose (papply (eql ? table-width)) #'length) table-rows))
+    `(defun ,name (rows)
+       (multiple-value-bind (rows width height)
+	   (layout-table rows)
+	 (cond ((not (eql height ,table-height)) :foo)
+	       ((not (eql width ,table-width)) :bar)
+	       ,@(loop
+		    :for (x y string) :in checks
+		    :collect `((not (search ,string
+					    (lhtml->text (select-layouted-cell rows ,x ,y))))
+			       :axx))
+	       (t (collecting
+		    ,@(loop
+			 :for (x y target) :in targets
+			 :collect `(let ((value (funcall ,value-map-f
+							 (select-layouted-cell rows ,x ,y))))
+				     (when value (collect (list (list ,@target) value))))))))))))

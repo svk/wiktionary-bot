@@ -4,10 +4,13 @@
 	       #:drakma
 	       #:cl-json
 	       #:cl-ppcre
+	       #:cxml
 	       #:closure-html)
   :serial t
   :components
   ((:file "package")
-   (:file "wiktionary")))
+   (:file "wiktionary")
+   (:file "dumps")
+   (:file "tables")))
 	       
   
