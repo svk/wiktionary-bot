@@ -5,7 +5,7 @@
 
 (defvar *cookies* (make-instance 'drakma:cookie-jar))
 
-(defparameter *delay-read* 10.0)
+(defparameter *delay-read* 1.0)
 (defparameter *delay-write* 90)
 
 (defun wait-read ()
@@ -24,6 +24,8 @@
 (defun drakma-request (url parameters &rest args)
   (let ((rv (apply #'drakma:http-request
 		   url
+		   :external-format-in :utf-8
+		   :external-format-out :utf-8
 		   :user-agent *user-agent*
 		   :parameters parameters
 		   :cookie-jar *cookies*
@@ -448,7 +450,7 @@
 		    :for (x y string) :in checks
 		    :collect `((not (search ,string
 					    (lhtml->text (select-layouted-cell rows ,x ,y))))
-			       :nil))
+			       nil))
 	       (t (collecting
 		    ,@(loop
 			 :for (x y target) :in targets
@@ -459,7 +461,7 @@
 (defun format-timestamp (&optional (timestamp (get-universal-time)))
   (format "~d" timestamp))
 
-(defun api-edit (title summary &key mutator prepend append minor bot)
+(defun api-edit (title summary &key mutator prepend append minor bot section createonly)
   (assert (or mutator prepend append))
   (assert (not (and mutator
 		    (or prepend append))))
@@ -487,8 +489,10 @@
 			     :action :edit
 			     :title title
 			     :summary summary
+			     :section section
 			     :starttimestamp start-timestamp
 			     :basetimestamp base-timestamp
+			     :createonly createonly
 			     :minor minor
 			     (append (if mutator
 					 (list :text (funcall mutator source))

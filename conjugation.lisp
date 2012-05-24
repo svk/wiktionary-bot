@@ -110,7 +110,7 @@
 			  (source-has-taboo? (swedish-dump-text conjugated-word)))
 		(collect (list pos conjugated-word word conjugation))))))))))
 
-(defparameter *collected-conjugation-tasks* nil)
+(defvar *collected-conjugation-tasks* nil)
 
 (defun collect-tasks (words)
   (loop
@@ -124,4 +124,53 @@
 		 number
 		 (length words)
 		 word)))
-	    
+
+(defun swedish-new-conjugated-form-page (base-form type)
+  (format nil "==Svenska==
+===~a===
+'''{{~a:PAGENAME}}'''
+#~a
+
+<!--[[-->" (swedish-long-pos-name type) (swedish-conjugation-pos type) (create-swedish-conjugation-link base-form type)))
+
+(defun swedish-long-pos-name (type)
+  (case type
+    (:adjective "Adjektiv")
+    (:noun "Substantiv")
+    (:verb "Verb")))
+
+(defun simulate-swedish-conjugation-task (task &key (test-page "User:MetallmanulBot/Grammar"))
+  (destructuring-bind (type conjugated-word base-word grammar)
+      task
+    (let ((template (create-swedish-conjugation-link base-word type))
+	  (template-pattern (create-swedish-conjugation-link-pattern base-word type))
+	  (existing (page-source conjugated-word))
+	  (language "Svenska")
+	  (type-name (swedish-long-pos-name type)))
+      (when (not (cl-ppcre:scan template-pattern existing))
+	(let* ((section-title (format nil "Would append to ~a.~a of ~a" language type-name conjugated-word))
+	       (formatted (format nil "
+==~a==
+~a
+===Task data===
+~a
+" section-title template task)))
+	  (api-edit test-page
+		    (format nil "Conjugation table task dry run for ~a/~a" conjugated-word base-word)
+		    :append formatted))))))
+
+(defun simple-swedish-conjugation-task (task)
+  (destructuring-bind (type conjugated-word base-word grammar)
+      task
+    (cond ((page-source conjugated-word)
+	   (format t "skipping ~a, page already exists" task))
+	  ((not (eq :noun type))
+	   (format t "skipping ~a, not a noun" task))
+	  (t
+	   (let ((task-summary (format nil
+				       "böjningsform av [[~a]] (automatiserad)"
+				       base-word)))
+	     (api-edit conjugated-word
+		       task-summary
+		       :createonly t
+		       :append (swedish-new-conjugated-form-page base-word type)))))))

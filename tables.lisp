@@ -31,14 +31,14 @@
    ("Böjningar" "Böjningar" "Attributivt")
    ("Obestämd" "Utrum" (:positive :utrum :indefinite :singular))
    ("Obestämd" "Neutrum" (:positive :neutrum :indefinite :singular))
-   ("Bestämd" "Maskulinum" (:positive :masculine :definite :singular))
+   ("Bestämd" "Mask" (:positive :masculine :definite :singular))
    ("Bestämd" "Alla" (:positive :all :definite :singular))
    ("Plural" "Plural" (:positive :plural))
    (nil nil "Predikativt")
    ("Singular" "Utrum" (:positive :utrum :predicative :singular))
    ("Singular" "Neutrum" (:positive :neutrum :predicative :singular))
    ("Plural" "Plural" (:positive :plural))
-   ("Kompareras inte" nil nil)))
+   ("Kompareras" nil nil)))
 
 (def-table-recognizer parse-swedish-adjective-table
     (compose #'trim #'lhtml->text)
