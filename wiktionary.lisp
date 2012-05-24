@@ -1,10 +1,18 @@
 (in-package :wiktionary-bot)
 
-(defparameter *user-agent* "Metallmanul Wiktionary bot (by svk)")
+(defparameter *user-agent* "MetallmanulBot for Wiktionary (run by Metallmanul)")
 (defparameter *wiktionary-language* "sv")
 
 (defvar *cookies* (make-instance 'drakma:cookie-jar))
 
+(defparameter *delay-read* 10.0)
+(defparameter *delay-write* 90)
+
+(defun wait-read ()
+  (sleep *delay-read*))
+
+(defun wait-write ()
+  (sleep *delay-write*))
 
 (defun read-login-info (&optional (filename #p"./data/bot-login.info"))
   (let ((*read-eval* nil))
@@ -14,11 +22,14 @@
 		(cdr (assoc :password alist)))))))
 
 (defun drakma-request (url parameters &rest args)
-  (apply #'drakma:http-request
-	 url
-	 :parameters parameters
-	 :cookie-jar *cookies*
-	 args))
+  (let ((rv (apply #'drakma:http-request
+		   url
+		   :user-agent *user-agent*
+		   :parameters parameters
+		   :cookie-jar *cookies*
+		   args)))
+	  (wait-read)
+	  rv))
 
 (defun fetch-json (url parameters &rest http-request-args)
   (json:decode-json
@@ -157,6 +168,7 @@
   (fetch-json (build-api-url :use-https use-https)
 	      (apply #'build-parameters
 		     :format :json
+		     :maxlag "1"
 		     args)
 	      :method (if use-post :post :get)))
 
@@ -248,14 +260,14 @@
      :collect
      (list 
       (let ((regex (concatenate 'string
-					    "{{"
-					    (cl-ppcre:regex-replace-all
-					     "([()])"
-					     template-name
-					     "\\\\\\1")
-					    "(|.*?)}}")))
-	#+still-segfaults
+				"{{"
+				(cl-ppcre:regex-replace-all
+				 "([()])"
+				 template-name
+				 "\\\\\\1")
+				"(|.*?)}}")))
 	(cl-ppcre:create-scanner regex)
+	#+wrong
 	#'(lambda (string)
 	    (cl-ppcre:scan regex string)))
       (concatenate 'string
@@ -265,17 +277,18 @@
 (def-simple-cached swedish-grammar-table-regexes
   (create-regexes-from-template-names (swedish-blessed-grammar-templates)))
 
-(defun scan-for-grammar-tables (regex-list page)
+(defun scan-for-grammar-tables (regex-list page &key double-check)
   (let ((before (page-source page))
-	(rendered (page-rendered page))
-	(after (page-source page)))
-    (when (not (equal before after))
-      (temporary-error :edited-during-scan page))
+	(rendered (page-rendered page)))
+    (when double-check
+      (let ((after (page-source page)))
+	(when (not (equal before after))
+	  (temporary-error :edited-during-scan page))))
     (collecting 
       (dolist (element regex-list)
 	(destructuring-bind (scanner class)
 	    element
-	  (when (funcall scanner after)
+	  (when (cl-ppcre:scan scanner before)
 	    (let ((tables (lhtml-select rendered :name :table :class (list class "grammar") :list t)))
 	      (when (eql (length tables) 1)
 		(collect (car tables))))))))))
@@ -347,9 +360,6 @@
 					      :key #'(lambda (z) (cons (car z) (cadr z)))
 					      :test #'equal))))))
       arr)))
-
-
-	      
 
 (defun merge-adjacent-strings (things)
   (reduce #'(lambda (a b)
@@ -432,16 +442,58 @@
     `(defun ,name (rows)
        (multiple-value-bind (rows width height)
 	   (layout-table rows)
-	 (cond ((not (eql height ,table-height)) :foo)
-	       ((not (eql width ,table-width)) :bar)
+	 (cond ((not (eql height ,table-height)) nil)
+	       ((not (eql width ,table-width)) nil)
 	       ,@(loop
 		    :for (x y string) :in checks
 		    :collect `((not (search ,string
 					    (lhtml->text (select-layouted-cell rows ,x ,y))))
-			       :axx))
+			       :nil))
 	       (t (collecting
 		    ,@(loop
 			 :for (x y target) :in targets
 			 :collect `(let ((value (funcall ,value-map-f
 							 (select-layouted-cell rows ,x ,y))))
 				     (when value (collect (list (list ,@target) value))))))))))))
+
+(defun format-timestamp (&optional (timestamp (get-universal-time)))
+  (format "~d" timestamp))
+
+(defun api-edit (title summary &key mutator prepend append minor bot)
+  (assert (or mutator prepend append))
+  (assert (not (and mutator
+		    (or prepend append))))
+  (let* ((result (api :action :query
+		     :prop '(:info :revisions)
+		     :intoken :edit
+		     :titles title
+		     :rvprop (append (if mutator
+					 '(:content)
+					 nil)
+				     '(:timestamp)))))
+    (format t "results were: ~a" result)
+    (let ((source (extract (list :query :pages #'cdar :revisions 0 :*)
+			   result))
+	  (start-timestamp (extract (list :query :pages #'cdar :starttimestamp)
+				    result))
+	  (base-timestamp (extract (list :query :pages #'cdar :revisions 0 :timestamp)
+				   result))
+	  (edit-token (extract (list :query :pages #'cdar :edittoken)
+			       result)))
+      (format t "~a ~a ~a ~a~%" source start-timestamp base-timestamp edit-token)
+      (when edit-token
+	(let ((result (apply #'api
+			     :use-post t
+			     :action :edit
+			     :title title
+			     :summary summary
+			     :starttimestamp start-timestamp
+			     :basetimestamp base-timestamp
+			     :minor minor
+			     (append (if mutator
+					 (list :text (funcall mutator source))
+					 (append (when append (list :appendtext append))
+						 (when prepend (list :prependtext prepend))))
+				     (list :token edit-token)))))
+		(wait-write)
+		result)))))

@@ -7,36 +7,41 @@
 (defparameter *swedish-index-filename* #p"./data/swedish-dump.index")
 (defvar *swedish-indexed-dump* nil)
 
-(defun parse-element (source element-name &key ignore-characters (make-last-read t))
-  (collecting
-    (klacks:skip source :start-element nil element-name element-name)
-    (let ((quit-this))
-      (loop
-	 :until quit-this
-	 :do
-	 (multiple-value-bind (event u v w)
-	     (klacks:peek source)
-	   (cond ((eq event :characters)
-		  (unless ignore-characters
-		    (collect u))
-		  (klacks:peek-next source))
-		 ((eq event :end-element)
-		  (when make-last-read
-		    (klacks:peek-next source))
-		  (setf quit-this t))
-		 ((eq event :start-element)
-		  (collect (cons (intern (string-upcase v) :keyword)
-				 (parse-element source v))))
-		 ((eq event :comment)
-		  (klacks:peek-next source))
-		 (t
-		  (error (format nil "was not expecting: ~a ~a ~a ~a" event u v w)))))))))
+(defun parse-element (source element-name &key ignore-characters (make-last-read t) clean-characters)
+  (let ((rv (collecting
+	      (klacks:skip source :start-element nil element-name element-name)
+	      (let ((quit-this))
+		(loop
+		   :until quit-this
+		   :do
+		   (multiple-value-bind (event u v w)
+		       (klacks:peek source)
+		     (cond ((eq event :characters)
+			    (unless ignore-characters
+			      (collect u))
+			    (klacks:peek-next source))
+			   ((eq event :end-element)
+			    (when make-last-read
+			      (klacks:peek-next source))
+			    (setf quit-this t))
+			   ((eq event :start-element)
+			    (collect (cons (intern (string-upcase v) :keyword)
+					   (parse-element source v :clean-characters clean-characters))))
+			   ((eq event :comment)
+			    (klacks:peek-next source))
+			   (t
+			    (error (format nil "was not expecting: ~a ~a ~a ~a" event u v w))))))))))
+    (if (and clean-characters
+	     (some (compose #'not #'stringp)
+		   rv))
+	(remove-if #'stringp rv)
+	rv)))
 
 (defun parse-page (source &key (make-last-read t))
   (loop
      :until (not (eq :characters (klacks:peek source)))
      :do (klacks:peek-next source))
-  (parse-element source "page" :ignore-characters t :make-last-read make-last-read))
+  (parse-element source "page" :ignore-characters t :make-last-read make-last-read :clean-characters t))
 
 (defun index-dump (pathname parsed-filename index-filename)
   (with-open-file (parsed-file parsed-filename :direction :output :if-exists :error)
@@ -56,7 +61,9 @@
 		       (current-position (file-position parsed-file)))
 		   (write page :stream parsed-file)
 		   (write-char #\newline parsed-file)
-		   (write (cons (cadr (assoc :title page)) current-position)
+		   (write (list (cadr (assoc :title page))
+				current-position
+				(cadr (assoc :ns page)))
 			  :stream index-file)
 		   (write-char #\newline index-file)
 		   (incf pages-processed)
@@ -77,8 +84,10 @@
 			 (loop
 			    :for x = (read f nil nil)
 			    :until (null x)
-			    :do (progn
-				  (setf (gethash (car x) ht) (cdr x)))))
+			    :do (destructuring-bind (title position namespace)
+				    x
+				  (setf (gethash title ht)
+					(list position namespace)))))
 		       ht)))
 
 (defun close-indexed-dump (dump)
@@ -87,18 +96,32 @@
   (setf (indexed-dump-map dump) nil))
 
 (defun indexed-dump-lookup (dump title)
-  (let ((position (gethash title (indexed-dump-map dump)))
+  (let ((position (car (gethash title (indexed-dump-map dump))))
 	(stream (indexed-dump-stream dump)))
-    (file-position stream position)
-    (read stream)))
+    (when position
+      (file-position stream position)
+      (read stream))))
 
-(defun indexed-dump-titles (dump)
-  (hash-table-keys (indexed-dump-map dump)))
+(defun indexed-dump-titles (dump &key namespace)
+  (collecting
+    (maphash #'(lambda (title value)
+		 (destructuring-bind (position actual-namespace)
+		     value
+		   (declare (ignore position))
+		   (when (or (null namespace)
+			     (equal namespace actual-namespace))
+		     (collect title))))
+	     (indexed-dump-map dump))))
 
 (defun swedish-indexed-dump ()
   (or *swedish-indexed-dump*
       (setf *swedish-indexed-dump*
-	    (open-indexed-dump *swedish-data-filename* *swedish-index-filename*))))
+	    (restart-case
+		(open-indexed-dump *swedish-data-filename* *swedish-index-filename*)
+	      (generate-index-dump ()
+		:report "Generate the index dump files"
+		(index-dump *raw-swedish-dump-filename* *swedish-data-filename* *swedish-index-filename*)
+		(open-indexed-dump *swedish-data-filename* *swedish-index-filename*))))))
 
 (defun close-swedish-indexed-dump ()
   (close-indexed-dump *swedish-indexed-dump*)
@@ -106,3 +129,25 @@
 
 (defun swedish-dump-lookup (title)
   (indexed-dump-lookup (swedish-indexed-dump) title))
+
+(defun dump-entry-text (entry)
+  (extract '(:revision :text 0) entry))
+
+(defun swedish-dump-titles (&key namespace)
+  (indexed-dump-titles (swedish-indexed-dump) :namespace namespace))
+
+(defun swedish-dump-text (title)
+  (dump-entry-text (swedish-dump-lookup title)))
+
+(let ((regex (cl-ppcre:create-scanner "([^:]+):.+")))
+  (defun title-category (title)
+    (multiple-value-bind (match groups)
+	(cl-ppcre:scan-to-strings regex title)
+      (and match
+	   (aref groups 0)))))
+
+(defun title-categories (titles)
+  (let ((categories))
+    (loop :for title :in titles :do (pushnew (title-category title) categories :test #'equal))
+    categories))
+  

@@ -4,6 +4,7 @@
 	       #:drakma
 	       #:cl-json
 	       #:cl-ppcre
+	       #:rfc3339-timestamp
 	       #:cxml
 	       #:closure-html)
   :serial t
@@ -11,6 +12,7 @@
   ((:file "package")
    (:file "wiktionary")
    (:file "dumps")
-   (:file "tables")))
+   (:file "tables")
+   (:file "conjugation")))
 	       
   
