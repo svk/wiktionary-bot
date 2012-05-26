@@ -93,22 +93,23 @@
 					  (mapcar #'parse-swedish-grammar-table
 						  (scan-for-grammar-tables (swedish-grammar-table-regexes)
 									   word))))
-      (destructuring-dolist ((conjugation conjugated-word) conjugations)
-	(unless (or (equal conjugated-word word)
-		    (or (and (eql (length conjugated-word) 1)
-			     (find (char-code (char conjugated-word 0))
-				   '(9660 9650 8211) ;; down-arrow and up-arrow and some sort of dash
-				   :test #'eql))
-			(or (search "," conjugated-word)
-			    (search "(" conjugated-word)
-			    (search ")" conjugated-word))
-			(equal conjugated-word "")))
-	  (let ((pattern (create-swedish-conjugation-link-pattern word pos)))
-	    (unless (and (swedish-dump-text conjugated-word)
-			 (cl-ppcre:scan pattern (swedish-dump-text conjugated-word)))
-	      (unless (or (source-has-taboo? (swedish-dump-text word))
-			  (source-has-taboo? (swedish-dump-text conjugated-word)))
-		(collect (list pos conjugated-word word conjugation))))))))))
+      (destructuring-dolist ((conjugation conjugated-words) conjugations)
+	(dolist (conjugated-word conjugated-words)
+	  (unless (or (equal conjugated-word word)
+		      (or (and (eql (length conjugated-word) 1)
+			       (find (char-code (char conjugated-word 0))
+				     '(9660 9650 8211) ;; down-arrow and up-arrow and some sort of dash
+				     :test #'eql))
+			  (or (search "," conjugated-word)
+			      (search "(" conjugated-word)
+			      (search ")" conjugated-word))
+			  (equal conjugated-word "")))
+	    (let ((pattern (create-swedish-conjugation-link-pattern word pos)))
+	      (unless (and (swedish-dump-text conjugated-word)
+			   (cl-ppcre:scan pattern (swedish-dump-text conjugated-word)))
+		(unless (or (source-has-taboo? (swedish-dump-text word))
+			    (source-has-taboo? (swedish-dump-text conjugated-word)))
+		  (collect (list pos conjugated-word word conjugation)))))))))))
 
 (defvar *collected-conjugation-tasks* nil)
 
@@ -128,10 +129,10 @@
 (defun swedish-new-conjugated-form-page (base-form type)
   (format nil "==Svenska==
 ===~a===
-'''{{~a:PAGENAME}}'''
+'''{{subst:PAGENAME}}'''
 #~a
 
-<!--[[-->" (swedish-long-pos-name type) (swedish-conjugation-pos type) (create-swedish-conjugation-link base-form type)))
+<!--[[-->" (swedish-long-pos-name type) (create-swedish-conjugation-link base-form type)))
 
 (defun swedish-long-pos-name (type)
   (case type
@@ -159,13 +160,11 @@
 		    (format nil "Conjugation table task dry run for ~a/~a" conjugated-word base-word)
 		    :append formatted))))))
 
-(defun simple-swedish-conjugation-task (task)
+(defun simple-swedish-conjugation-task (task &key (extra-delay 10))
   (destructuring-bind (type conjugated-word base-word grammar)
       task
     (cond ((page-source conjugated-word)
 	   (format t "skipping ~a, page already exists" task))
-	  ((not (eq :noun type))
-	   (format t "skipping ~a, not a noun" task))
 	  (t
 	   (let ((task-summary (format nil
 				       "böjningsform av [[~a]] (automatiserad)"
@@ -173,4 +172,6 @@
 	     (api-edit conjugated-word
 		       task-summary
 		       :createonly t
-		       :append (swedish-new-conjugated-form-page base-word type)))))))
+		       :append (swedish-new-conjugated-form-page base-word type)))))
+    (when extra-delay
+      (sleep extra-delay))))

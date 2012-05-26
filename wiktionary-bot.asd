@@ -1,6 +1,8 @@
 (asdf:defsystem #:wiktionary-bot
   :depends-on (#:svk-util
 	       #:cl-utilities
+	       #:cl-unicode
+	       #:lispbuilder-yacc
 	       #:drakma
 	       #:cl-json
 	       #:cl-ppcre
@@ -11,8 +13,11 @@
   :components
   ((:file "package")
    (:file "wiktionary")
+   (:file "markup")
+   (:file "tokens")
    (:file "dumps")
    (:file "tables")
-   (:file "conjugation")))
+   (:file "conjugation")
+   (:file "unknown")))
 	       
   

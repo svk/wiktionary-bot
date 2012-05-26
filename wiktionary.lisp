@@ -115,14 +115,16 @@
   (intern (cond ((stringp x) (string-upcase x))
 		(t x)) :keyword))
 
-(defun build-api-url (&key use-https)
+(defun build-api-url (&key use-https (site "wiktionary.org"))
   (concatenate 'string
 	       (if use-https
 		   "https"
 		   "http")
 	       "://"
 	       *wiktionary-language*
-	       ".wiktionary.org/w/api.php?"))
+	       "."
+	       site
+	       "/w/api.php?"))
 
 (defun build-parameters (&rest parameters)
   (collecting
@@ -174,13 +176,31 @@
 		     args)
 	      :method (if use-post :post :get)))
 
+(defun wikipedia-api (&rest args &key use-https use-post &allow-other-keys)
+  (setf args (remove-keyword-parameter :use-https args))
+  (setf args (remove-keyword-parameter :use-post args))
+  (fetch-json (build-api-url :use-https use-https :site "wikipedia.org")
+	      (apply #'build-parameters
+		     :format :json
+		     :maxlag "1"
+		     args)
+	      :method (if use-post :post :get)))
+
 (defun api-post (&rest args)
   (apply #'api
 	 :use-post t
 	 args))
 
+(defun wikipedia-api-post (&rest args)
+  (apply #'wikipedia-api
+	 :use-post t
+	 args))
+
 (defun api-get (&rest args)
   (apply #'api args))
+
+(defun wikipedia-api-get (&rest args)
+  (apply #'wikipedia-api args))
 
 (defun api-watchlist-raw ()
   (api-get :action :query
@@ -193,11 +213,22 @@
 	 :action :query
 	 args))
 
+(defun wikipedia-api-query (&rest args)
+  (apply #'wikipedia-api-get
+	 :action :query
+	 args))
+
 (defun api-revisions (titles &key (prop '("content")) parse)
   (api-query :prop :revisions
 	     :titles titles
 	     :rvparse parse
 	     :rvprop prop))
+
+(defun wikipedia-api-revisions (titles &key (prop '("content")) parse)
+  (wikipedia-api-query :prop :revisions
+		       :titles titles
+		       :rvparse parse
+		       :rvprop prop))
 
 (defun api-expandtemplates (text)
   (api-get :action :expandtemplates
@@ -229,6 +260,11 @@
   (extract (list :query :pages #'cdar :revisions 0 :*)
 	   (api-revisions title
 			  :prop "content")))
+
+(defun wikipedia-page-source (title)
+  (extract (list :query :pages #'cdar :revisions 0 :*)
+	   (wikipedia-api-revisions title
+				    :prop "content")))
 
 (defun page-rendered (title)
   (parse-html (extract (list :query :pages #'cdar :revisions 0 :*)

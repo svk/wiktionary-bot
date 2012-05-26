@@ -1,7 +1,13 @@
 (in-package :wiktionary-bot)
+
+(defun links-from-table-cell (cell)
+  (mapcar (compose #'trim #'third)
+	  (lhtml-select (list* :virtual nil cell)
+			:name :a
+			:list t)))
 		      
 (def-table-recognizer parse-swedish-noun-table
-    (compose #'trim #'lhtml->text)
+    #'links-from-table-cell
   (("Böjningar" "Singular" "Singular" "Plural" "Plural")
    ("utrum" "Obestämd" "Bestämd" "Obestämd" "Bestämd")
    ("Nominativ" (:singular :indefinite :nominative)
@@ -14,7 +20,7 @@
 	      (:plural :definite :genitive))))
 
 (def-table-recognizer parse-swedish-verb-table
-    (compose #'trim #'lhtml->text)
+    #'links-from-table-cell
   (("Böjningar" "Aktiv" "Passiv")
    ("Infinitiv" (:active :infinitive) (:passive :infinitive))
    ("Presens" (:active :present) (:passive :present))
@@ -26,7 +32,7 @@
    ("Perfekt" (:perfect :participle) nil)))
 
 (def-table-recognizer parse-swedish-adjective-noncomparative-table
-    (compose #'trim #'lhtml->text)
+    #'links-from-table-cell
   (("Böjningar" "Böjningar" "Positiv")
    ("Böjningar" "Böjningar" "Attributivt")
    ("Obestämd" "Utrum" (:positive :utrum :indefinite :singular))
@@ -41,7 +47,7 @@
    ("Kompareras" nil nil)))
 
 (def-table-recognizer parse-swedish-adjective-table
-    (compose #'trim #'lhtml->text)
+    #'links-from-table-cell
   (("Böjningar" "Böjningar" "Positiv" "Komparativ" "Superlativ")
    ("Böjningar" "Böjningar" "Attributivt" "Attributivt" "Attributivt")
    ("Obestämd" "Utrum"

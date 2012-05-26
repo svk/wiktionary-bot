@@ -2,11 +2,6 @@
 
 (defstruct indexed-dump stream map)
 
-(defparameter *raw-swedish-dump-filename* #p"./data/svwiktionary-20120516-pages-meta-current.xml")
-(defparameter *swedish-data-filename* #p"./data/swedish-dump.data")
-(defparameter *swedish-index-filename* #p"./data/swedish-dump.index")
-(defvar *swedish-indexed-dump* nil)
-
 (defun parse-element (source element-name &key ignore-characters (make-last-read t) clean-characters)
   (let ((rv (collecting
 	      (klacks:skip source :start-element nil element-name element-name)
@@ -26,7 +21,8 @@
 			    (setf quit-this t))
 			   ((eq event :start-element)
 			    (collect (cons (intern (string-upcase v) :keyword)
-					   (parse-element source v :clean-characters clean-characters))))
+					   (merge-adjacent-strings
+					    (parse-element source v :clean-characters clean-characters)))))
 			   ((eq event :comment)
 			    (klacks:peek-next source))
 			   (t
@@ -69,13 +65,13 @@
 		   (incf pages-processed)
 		   (when (zerop (mod pages-processed 1000))
 		     (format t
-			     "[index-dump] indexing ~a into ~a/~a, ~a pages processed~%"
+			     "[index-dump] ~a pages processed, indexing ~a into ~a/~a~%"
+			     pages-processed
 			     pathname
 			     index-filename
-			     parsed-filename
-			     pages-processed)))))))))
+			     parsed-filename)))))))))
 
-(defun open-indexed-dump (data-file-name index-file-name)
+(defun open-indexed-dump (data-file-name index-file-name &key (sanitize t))
   (make-indexed-dump :stream
 		     (open data-file-name :direction :input)
 		     :map
@@ -83,11 +79,16 @@
 		       (with-open-file (f index-file-name :direction :input)
 			 (loop
 			    :for x = (read f nil nil)
+			    :for i :from 1
 			    :until (null x)
 			    :do (destructuring-bind (title position namespace)
-				    x
+				    (if sanitize
+					(sanitize-all-strings x)
+					x)
 				  (setf (gethash title ht)
-					(list position namespace)))))
+					(list position namespace)))
+			    :do (when (zerop (mod i 1000))
+				  (format t "[open-indexed-dump] ~a pages processed~%" i))))
 		       ht)))
 
 (defun close-indexed-dump (dump)
@@ -95,12 +96,16 @@
   (setf (indexed-dump-stream dump) nil)
   (setf (indexed-dump-map dump) nil))
 
-(defun indexed-dump-lookup (dump title)
+(defun indexed-dump-lookup (dump title &key (sanitize t))
   (let ((position (car (gethash title (indexed-dump-map dump))))
 	(stream (indexed-dump-stream dump)))
     (when position
       (file-position stream position)
-      (read stream))))
+      (let ((*read-eval* nil))
+	(let ((result (read stream)))
+	  (if sanitize
+	      (sanitize-all-strings result)
+	      result))))))
 
 (defun indexed-dump-titles (dump &key namespace)
   (collecting
@@ -113,6 +118,37 @@
 		     (collect title))))
 	     (indexed-dump-map dump))))
 
+(defmacro def-indexed-dump (var data-filename index-filename raw-filename get close)
+  `(progn
+     (defvar ,var nil)
+     (defun ,get ()
+       (or ,var
+	   (setf ,var
+		 (restart-case
+		     (open-indexed-dump ,data-filename ,index-filename)
+		   (generate-index-dump ()
+		     :report ,(format nil "Generate the indexed dump from ~a" raw-filename)
+		     (index-dump ,raw-filename ,data-filename ,index-filename)
+		     (open-indexed-dump ,data-filename ,index-filename))))))
+     (defun ,close ()
+       (close-indexed-dump ,var)
+       (setf ,var nil))))
+
+(def-indexed-dump *swedish-indexed-dump*
+    #p"./data/swedish-dump.data"
+    #p"./data/swedish-dump.index"
+    #p"./data/svwiktionary-20120516-pages-meta-current.xml"
+    swedish-indexed-dump
+    close-swedish-indexed-dump)
+
+(def-indexed-dump *swedish-indexed-wp-dump*
+    #p"./data/swedish-wp-dump.data"
+    #p"./data/swedish-wp-dump.index"
+    #p"./data/svwiki-20120514-pages-meta-current.xml"
+    swedish-indexed-wp-dump
+    close-swedish-indexed-wp-dump)
+    
+#+fdjsk
 (defun swedish-indexed-dump ()
   (or *swedish-indexed-dump*
       (setf *swedish-indexed-dump*
@@ -123,6 +159,7 @@
 		(index-dump *raw-swedish-dump-filename* *swedish-data-filename* *swedish-index-filename*)
 		(open-indexed-dump *swedish-data-filename* *swedish-index-filename*))))))
 
+#+dfjsk
 (defun close-swedish-indexed-dump ()
   (close-indexed-dump *swedish-indexed-dump*)
   (setf *swedish-indexed-dump* nil))
@@ -150,4 +187,38 @@
   (let ((categories))
     (loop :for title :in titles :do (pushnew (title-category title) categories :test #'equal))
     categories))
-  
+
+(let ((surrogate-list (list (cl-unicode:property-symbol "Block:High Private Use Surrogates")
+			    (cl-unicode:property-symbol "Block:High Surrogates")
+			    (cl-unicode:property-symbol "Block:Low Surrogates"))))
+  (defun sanitize-character (character)
+    (cond ((find character surrogate-list :test #'cl-unicode:has-property)
+	       #\?)
+	      (t character))))
+
+(defun sanitize-string (string)
+  (map 'string #'sanitize-character string))
+
+(defun sanitize-all-strings (structure)
+  (cond ((consp structure)
+	 (cons (sanitize-all-strings (car structure))
+	       (sanitize-all-strings (cdr structure))))
+	((stringp structure) (sanitize-string structure))
+	(t structure)))
+
+
+(defun swedish-wp-titles-sample (&optional (n 1000))
+  (single-value (first-n (indexed-dump-titles (swedish-indexed-wp-dump) :namespace "0") n)))
+
+(defun swedish-wp-titles-random-sample (&optional (n 1000))
+  (single-value (first-n (randomize-list (indexed-dump-titles (swedish-indexed-wp-dump) :namespace "0")) n)))
+
+(defun swedish-wp-text (title)
+  (dump-entry-text (indexed-dump-lookup (swedish-indexed-wp-dump) title)))
+
+(def-simple-cached swedish-title-table
+  (let ((ht (make-hash-table :test #'equal)))
+    (loop
+       :for title :in  (swedish-dump-titles :namespace "0")
+       :do (setf (gethash (string-upcase title) ht) title))
+    ht))
