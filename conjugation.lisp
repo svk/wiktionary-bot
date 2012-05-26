@@ -113,7 +113,7 @@
 
 (defvar *collected-conjugation-tasks* nil)
 
-(defun collect-tasks (words)
+(defun collect-conjugation-tasks (words)
   (loop
      :for word :in words
      :for number :from 1
@@ -172,6 +172,7 @@
 	     (api-edit conjugated-word
 		       task-summary
 		       :createonly t
+		       :minor t
 		       :append (swedish-new-conjugated-form-page base-word type)))))
     (when extra-delay
       (sleep extra-delay))))

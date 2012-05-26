@@ -531,7 +531,8 @@
 			     :createonly createonly
 			     :minor minor
 			     (append (if mutator
-					 (list :text (funcall mutator source))
+					 (list :text (or (funcall mutator source)
+							 (error "mutator returned NIL")))
 					 (append (when append (list :appendtext append))
 						 (when prepend (list :prependtext prepend))))
 				     (list :token edit-token)))))

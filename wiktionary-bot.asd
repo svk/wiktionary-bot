@@ -18,6 +18,7 @@
    (:file "dumps")
    (:file "tables")
    (:file "conjugation")
-   (:file "unknown")))
+   (:file "unknown")
+   (:file "auto")))
 	       
   
