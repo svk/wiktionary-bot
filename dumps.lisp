@@ -137,7 +137,7 @@
 (def-indexed-dump *swedish-indexed-dump*
     #p"./data/swedish-dump.data"
     #p"./data/swedish-dump.index"
-    #p"./data/svwiktionary-20120516-pages-meta-current.xml"
+    #p"./data/svwiktionary-20120616-pages-meta-current.xml"
     swedish-indexed-dump
     close-swedish-indexed-dump)
 
@@ -212,6 +212,9 @@
 
 (defun swedish-wp-titles-random-sample (&optional (n 1000))
   (single-value (first-n (randomize-list (indexed-dump-titles (swedish-indexed-wp-dump) :namespace "0")) n)))
+
+(defun swedish-dump-titles-random-sample (&optional (n 1000))
+  (single-value (first-n (randomize-list (indexed-dump-titles (swedish-indexed-dump) :namespace "0")) n)))
 
 (defun swedish-wp-text (title)
   (dump-entry-text (indexed-dump-lookup (swedish-indexed-wp-dump) title)))

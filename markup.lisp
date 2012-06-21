@@ -156,7 +156,7 @@
 
   (piped-text*-list
    (text* #'list)
-   (text* ! piped-text+-list #'(lambda ( a b c) (cons a c))))
+   (text* ! piped-text*-list #'(lambda ( a b c) (cons a c))))
 
   (piped-string-list
    (string #'list)

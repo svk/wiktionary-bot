@@ -31,6 +31,44 @@
    ("Presens" (:present :participle) nil)
    ("Perfekt" (:perfect :participle) nil)))
 
+(def-table-recognizer parse-swedish-verb-table-always-active
+    #'links-from-table-cell
+  (("Böjningar" "Aktiv")
+   ("Infinitiv" (:active :infinitive))
+   ("Presens" (:active :present))
+   ("Preteritum" (:active :past))
+   ("Supinum" (:active :supinum))
+   ("Imperativ" (:active :imperative))
+   ("Particip" "Particip")
+   ("Presens" (:present :participle))
+   ("Perfekt" (:perfect :participle))))
+
+(def-table-recognizer parse-swedish-verb-table-always-active-alternative
+    #'links-from-table-cell
+  (("Böjningar" "Aktiv")
+   ("Infinitiv" (:active :infinitive))
+   ("Presens" (:active :present))
+   ("Preteritum" (:active :past))
+   ("Supinum" (:active :supinum))
+   ("Imperativ" (:active :imperative))
+   ("Particip" "Particip")
+   ("Presens" (:present :participle))
+   ("Perfekt" (:perfect :participle))
+   (nil nil)))
+
+(def-table-recognizer parse-swedish-verb-table-alternative
+    #'links-from-table-cell
+  (("Böjningar" "Aktiv" "Passiv")
+   ("Infinitiv" (:active :infinitive) (:passive :infinitive))
+   ("Presens" (:active :present) (:passive :present))
+   ("Preteritum" (:active :past) (:passive :past))
+   ("Supinum" (:active :supinum) (:passive :supinum))
+   ("Imperativ" (:active :imperative) nil)
+   ("Particip" "Particip" "Particip")
+   ("Presens" (:present :participle) nil)
+   ("Perfekt" (:perfect :participle) nil)
+   (nil nil nil)))
+
 (def-table-recognizer parse-swedish-adjective-noncomparative-table
     #'links-from-table-cell
   (("Böjningar" "Böjningar" "Positiv")
@@ -45,6 +83,15 @@
    ("Singular" "Neutrum" (:positive :neutrum :predicative :singular))
    ("Plural" "Plural" (:positive :plural))
    ("Kompareras" nil nil)))
+
+(def-table-recognizer parse-swedish-noun-uncountable-table
+    #'links-from-table-cell
+  (("Böjningar" "Oräknebart" "Oräknebart")
+   ("neutrum" "Obestämd" "Bestämd")
+   ("Nominativ" (:nominative :uncountable :indefinite)
+		(:nominative :uncountable :definite))
+   ("Genitiv" (:genitive :uncountable :indefinite)
+	      (:genitive :uncountable :definite))))
 
 (def-table-recognizer parse-swedish-adjective-table
     #'links-from-table-cell
@@ -87,7 +134,6 @@
    ("Adverbavledning" "Adverbavledning"
 		      (:adverbial)
 		      nil nil)))
-   
-
+ 
 
 	       

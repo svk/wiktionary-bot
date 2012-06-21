@@ -54,7 +54,9 @@
 '''''Ja'''''.
 
 Pågående jobb: '''~a'''
+
 Startet: ~a
+
 " *job-description* (rfc3339:make-timestamp :utc-time *job-started*))))
 
 (defun update-auto-status-end-job (reason)
@@ -64,52 +66,109 @@ Startet: ~a
 '''''Nei'''''.
 
 Siste jobb: '''~a'''
+
 Startet: ~a
+
 Avsluttet: ~a (~a)
 " *job-description* (rfc3339:make-timestamp :utc-time *job-started*)
                     (rfc3339:make-timestamp :utc-time (get-universal-time))
 		    reason)))
 
-(defmacro automatic-loop ((job-description &key (wait 1) (report t)) &body body)
-  (let ((stop-reason-sym (gensym "STOP-REASON")))
+(defmacro automatic-loop ((job-description &key (announce t) (wait 1) (report t)) &body body)
+  (let ((stop-reason-sym (gensym "STOP-REASON"))
+	(report-sym (gensym "REPORT"))
+	(announce-sym (gensym "ANNOUNCE"))
+	(wait-sym (gensym "WAIT")))
     `(progn
        (assert (not *job-description*))
        (let ((*job-description* ,job-description)
 	     (*job-started* (get-universal-time))
-	     (,stop-reason-sym :ERROR))
+	     (,stop-reason-sym :ERROR)
+	     (,report-sym ,report)
+	     (,announce-sym ,announce)
+	     (,wait-sym ,wait))
 	 (unwind-protect
 	      (progn
-		(update-auto-status-begin-job)
+		(when ,announce-sym
+		  (update-auto-status-begin-job))
 		(loop	   
 		   :do (progn ,@body)
 		   :do (when (emergency-stop?)
 			 (setf ,stop-reason-sym :EMERGENCY)
 			 (return))
-		   ,@(when report
-			   (list :do
-				 (if (functionp report)
-				     (list 'funcall report)
-				     '(format
-				       t
-				       "[automatic-loop] ~a: job (~a) ongoing since ~a~%"
-				       (rfc3339:make-timestamp)
-				       *job-description*
-				       (rfc3339:make-timestamp :utc-time *job-started*)))))
-		   ,@(when wait (list :do `(sleep ,wait))))
-		(setf ,stop-reason-sym :SUCCESS))
+		   :do (when ,report-sym
+			 (if (functionp ,report-sym)
+			     (funcall ,report-sym)
+			     (format
+			      t
+			      "[automatic-loop] ~a: job (~a) ongoing since ~a~%"
+			      (rfc3339:make-timestamp)
+			      *job-description*
+			      (rfc3339:make-timestamp :utc-time *job-started*))))
+		   :do (when ,wait-sym
+			 (sleep ,wait-sym))))
+		(unless (eq ,stop-reason-sym :EMERGENCY)
+		  (setf ,stop-reason-sym :SUCCESS)))
+	 (when ,announce-sym
 	   (update-auto-status-end-job
 	    (case ,stop-reason-sym
 	      (:EMERGENCY *emergency-stop-reason*)
 	      (:SUCCESS *success-reason*)
 	      (:ERROR *error-reason*)
-	      (otherwise "?"))))))))
+	      (otherwise "?"))))
+	 nil))))
 
-(defun auto-exhaust-conjugation-tasks (&key (job-description "lager bøyningsformsartikler"))
+(defun auto-exhaust-conjugation-tasks (&key (job-description "bøyningsformsartikler") (announce t))
+  (assert (or (not announce)
+	      (> (length *collected-conjugation-tasks*) 50)))
   (automatic-loop (job-description
-		   :wait 10
-		   :report t)
+		   :wait 2
+		   :report t
+		   :announce announce)
     (when (null *collected-conjugation-tasks*)
       (return))
     (simple-swedish-conjugation-task (pop *collected-conjugation-tasks*))))
-    
+
+(defun full-auto-conjugation-tasks (&key (job-description "bøyningsformsartikler (helautomatisk)"))
+  (let ((*collected-conjugation-tasks* nil))
+    (automatic-loop (job-description
+		     :wait 2
+		     :report t)
+      (if (null *collected-conjugation-tasks*)
+	  (collect-some-conjugation-tasks)
+	  (simple-swedish-conjugation-task (pop *collected-conjugation-tasks*))))))
+
+(defun full-auto-conjugation-tasks+recent-conjugation (&key (job-description "bøyningsformsartikler (helautomatisk, med overvåkning av Recent Changes)"))
+  (let ((*collected-conjugation-tasks* nil)
+	(last-rc-check nil)
+	(rc-interval (* 60 10))
+	(error-interval 60))
+    (automatic-loop (job-description
+		     :wait 0.5
+		     :report t)
+      (handler-case
+	  (if (or (null last-rc-check)
+		  (>= (- (get-universal-time) last-rc-check)
+		      rc-interval))
+	      (let ((changed-titles (remove-duplicates (recent-changes :n 50 :end-timestamp last-rc-check)
+						       :test #'equal)))
+		(collect-conjugation-tasks changed-titles)
+		(setf *collected-conjugation-tasks*
+		      (reverse (filter-redlink-list *collected-conjugation-tasks* :key #'second)))
+		(setf last-rc-check (get-universal-time))
+		(irc-report (concatenate 'string "Checked RC, tasks now:" (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*)))))
+	      (if (null *collected-conjugation-tasks*)
+		  (progn (collect-some-conjugation-tasks)
+			 (irc-report (concatenate 'string "Collected tasks, tasks now:" (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*)))))
+		  #-newcode
+		  (progn (simple-swedish-conjugation-tasks *collected-conjugation-tasks*)
+			 (setf *collected-conjugation-tasks* nil))
+		  #+oldcode(loop
+		     :for i :from 1 :to 10
+		     :while *collected-conjugation-tasks*
+		     :do (simple-swedish-conjugation-task (pop *collected-conjugation-tasks*)))))
+	(operation-failed ()
+	  (format t "[auto] operation failed, delay ~d seconds~%" error-interval)
+	  (sleep error-interval)
+	  (setf error-interval (* 2 error-interval)))))))
     

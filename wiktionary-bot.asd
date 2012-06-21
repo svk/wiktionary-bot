@@ -8,6 +8,7 @@
 	       #:cl-ppcre
 	       #:rfc3339-timestamp
 	       #:cxml
+	       #:cl-irc
 	       #:closure-html)
   :serial t
   :components
@@ -18,7 +19,9 @@
    (:file "dumps")
    (:file "tables")
    (:file "conjugation")
+   (:file "irc")
    (:file "unknown")
-   (:file "auto")))
+   (:file "auto")
+   (:file "recent")))
 	       
   

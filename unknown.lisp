@@ -15,6 +15,7 @@
 (defun unknown-words ()
   (collecting
     (destructuring-dolist ((word sentence title) (hash-table-values *unknown-words*))
+      (declare (ignore sentence title))
       (collect word))))
 
 (let ((number-regex (cl-ppcre:create-scanner "\\d+"))
@@ -27,42 +28,52 @@
 (defparameter *unknown-word-sentence-taboos* (mapcar #'cl-ppcre:create-scanner
 						     '("http")))
 
-(defun scan-for-unknown-words (title)
-  (when (listp title)
-    (loop
-       :for actual-title :in title
-       :do (scan-for-unknown-words actual-title))
-    (return-from scan-for-unknown-words))
-  (handler-case 
-      (labels ((exclude-word (word)
-		 (or (word-in-swedish-wiktionary? word)
-		     (uninteresting-word? word)))
-	       (exclude-sentence (sentence)
-		 (or (< (length sentence) 3)
-		     (loop
-			:for taboo :in *unknown-word-sentence-taboos*
-			:if (some (papply (cl-ppcre:scan taboo ?)) sentence)
-			:collect t)
-		     (> (length (remove-if-not #'exclude-word
-					       sentence))
-			1)))
-	       (exclude-article (raw-text)
-		 (cl-ppcre:scan "{{robotskapad" raw-text)))
-	(let ((raw-text (swedish-wp-text title)))
-	  (unless (exclude-article raw-text)
-	    (let ((wikitext (parse-wikitext-ignore-errors raw-text)))
-	      (when wikitext
-		(let ((sentences (tokens->sentences (parsed-wikitext->tokens wikitext))))
-		  (loop :for sentence :in sentences
-		     :unless (exclude-sentence sentence)
-		     :do (loop :for word :in sentence
-			    :unless (exclude-word word)
-			    :do (let ((entry (gethash (string-upcase word) *unknown-words* nil)))
-				  (if entry
-				      (pushnew title (third entry) :test #'equal)
-				      (setf (gethash (string-upcase word) *unknown-words*)
-					    (list word sentence (list title)))))))))))))
-	(wikitext-extraction-error () nil)))
+(let ((redirect-regex (cl-ppcre:create-scanner "#redirect" :case-insensitive-mode t))
+      (robot-regex (cl-ppcre:create-scanner "{{robotskapad" :case-insensitive-mode t)))
+  (defun scan-for-unknown-words (title)
+    (when (listp title)
+      (loop
+	 :for actual-title :in title
+	 :for i :from 1
+	 :do (scan-for-unknown-words actual-title)
+	 :do (when (zerop (mod i 1000))
+	       (format t
+		       "[scan-for-unknown-words] ~a: processed ~a (word #~a)~%"
+		       (rfc3339:make-timestamp)
+		       actual-title
+		       i)))
+      (return-from scan-for-unknown-words))
+    (handler-case 
+	(labels ((exclude-word (word)
+		   (or (word-in-swedish-wiktionary? word)
+		       (uninteresting-word? word)))
+		 (exclude-sentence (sentence)
+		   (or (< (length sentence) 3)
+		       (loop
+			  :for taboo :in *unknown-word-sentence-taboos*
+			  :if (some (papply (cl-ppcre:scan taboo ?)) sentence)
+			  :collect t)
+		       (> (length (remove-if #'exclude-word
+					     sentence))
+			  1)))
+		 (exclude-article (raw-text)
+		   (or (cl-ppcre:scan redirect-regex raw-text)
+		       (cl-ppcre:scan robot-regex raw-text))))
+	  (let ((raw-text (swedish-wp-text title)))
+	    (unless (exclude-article raw-text)
+	      (let ((wikitext (parse-wikitext-ignore-errors raw-text)))
+		(when wikitext
+		  (let ((sentences (tokens->sentences (parsed-wikitext->tokens wikitext))))
+		    (loop :for sentence :in sentences
+		       :unless (exclude-sentence sentence)
+		       :do (loop :for word :in sentence
+			      :unless (exclude-word word)
+			      :do (let ((entry (gethash (string-upcase word) *unknown-words* nil)))
+				    (if entry
+					(pushnew title (third entry) :test #'equal)
+					(setf (gethash (string-upcase word) *unknown-words*)
+					      (list word sentence (list title)))))))))))))
+      (wikitext-extraction-error () nil))))
 
 (def-simple-cached autowikibrowser-typos
   (let ((regex (cl-ppcre:create-scanner "<Typo\\s+word=\"([^\"]+)\"\\s+find=\"([^\"]+)\"\\s+replace=\"([^\"]+)\"\\s+/>"))
@@ -75,15 +86,16 @@
 		    (if (not begin)
 			(return)
 			(progn (multiple-value-bind (match strings)
-				   (cl-ppcre:scan-to-strings regex text :start position)			      
+				   (cl-ppcre:scan-to-strings regex text :start position)
+				 (declare (ignore match))
 				 (handler-case (collect (list (aref strings 0)
 							      (cl-ppcre:create-scanner (aref strings 1))
 							      (cl-ppcre:regex-replace-all
 							       "\\$(\\d+)"
 							       (aref strings 2)
 							       "\\\\\\1")))
-				   (cl-ppcre:ppcre-syntax-error
-				       (format t "[autowikibrowser-typos] unable to parse ~a (~a -> ~a)~%" (aref strings 0) (aref strings 1) (aref strings 2)))))
+				   (cl-ppcre:ppcre-syntax-error ()
+				     (format t "[autowikibrowser-typos] unable to parse ~a (~a -> ~a)~%" (aref strings 0) (aref strings 1) (aref strings 2)))))
 			       (setf position end)))))))))
 
 (defun is-autowikibrowser-typo? (word)
@@ -137,6 +149,8 @@
 
 
 (defun filter-redlink-list (titles &key (bunch-size 50) (extra-delay 5) (key #'identity))
+  (when (null titles)
+    (return-from filter-redlink-list nil))
   (collecting
     (dolist (bunch (bunch titles bunch-size))
       (dolist (entry (extract '(:query :pages) (api-query :query :prop
@@ -145,8 +159,9 @@
 	(when (assoc :missing (cdr entry))
 	  (let ((title (cdr (assoc :title (cdr entry)))))
 	    (let ((entry (find title titles :test #'equal :key key)))
-	      (assert entry)
-	      (collect entry)))))
+	      (if (not entry)
+		  (format t "WARNING: \"~a\" was not in title list ~a, what is going on?~%" title titles)
+		  (collect entry))))))
       (when extra-delay
 	(sleep extra-delay)))))
 

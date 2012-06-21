@@ -1,5 +1,27 @@
 (in-package :wiktionary-bot)
 
+(defparameter *conjugation-check-log-filename* #p"./data/conjugation-checked-pages-log.generated.lisp")
+
+(defparameter *conjugation-checked-pages* (let ((ht (make-hash-table :test #'equal)))
+			       (with-open-file (f *conjugation-check-log-filename* :direction :input :if-does-not-exist nil)
+				 (when f
+				   (loop
+				      :for x = (let ((*read-eval* nil)) (read f nil nil))
+				      :until (null x)
+				      :do (setf (gethash (first x) ht) (second x)))))
+			       ht))
+
+(defun register-in-conjugation-check-log (title timestamp)
+  (setf (gethash title *conjugation-checked-pages*) timestamp)
+  (with-open-file (*standard-output* *conjugation-check-log-filename* :direction :output :if-exists :append)
+    (write (list title timestamp))))
+
+(defun in-conjugation-check-log? (title)
+  (multiple-value-bind (timestamp present-p)
+      (gethash title *conjugation-checked-pages*)
+    (declare (ignore timestamp))
+    present-p))
+
 (let ((regex (cl-ppcre:create-scanner "{{böjning\\|sv\\|([^|}]+)\\|(text=)?[^}]+}}")))
   (defun word-class-in-swedish-conjugation-link (source)
     (multiple-value-bind (match groups)
@@ -53,10 +75,18 @@
 	       target
 	       "}}"))
 
-(defun swedish-pages-with-blessed-grammar-templates-in-dump ()
+(defun swedish-pages-with-blessed-grammar-templates-in-dump (&key sample criterion)
   (let ((regexes (mapcar #'car (swedish-grammar-table-regexes))))
     (loop
-       :for title :in (swedish-dump-titles :namespace "0")
+       :for title :in (remove-if-not
+		       (or criterion
+			   #'(lambda (title) (declare (ignore title)) t))
+		       (if sample
+			   (swedish-dump-titles-random-sample sample)
+			   (swedish-dump-titles :namespace "0")))
+       :for i :from 1
+       :do (when (zerop (mod i 100))
+	     (format t "[swedish-pages-with...] processed ~a~%" i))
        :if (let ((source (swedish-dump-text title)))
 	     (some #'(lambda (regex)
 		       (cl-ppcre:scan regex source))
@@ -74,6 +104,10 @@
 (defun parse-swedish-grammar-table (table)
   (let ((functions (list (cons #'parse-swedish-noun-table :noun)
 			 (cons #'parse-swedish-verb-table :verb)
+			 (cons #'parse-swedish-verb-table-alternative :verb)
+			 (cons #'parse-swedish-verb-table-always-active :verb)
+			 (cons #'parse-swedish-verb-table-always-active-alternative :verb)
+			 (cons #'parse-swedish-noun-uncountable-table :noun)
 			 (cons #'parse-swedish-adjective-noncomparative-table :adjective)
 			 (cons #'parse-swedish-adjective-table :adjective))))
     (destructuring-dolist ((function . type) functions)
@@ -87,12 +121,16 @@
     (or (cl-ppcre:scan robotskapad-regex source))))
 
 (defun swedish-missing-conjugation-links (word)
+  (when (in-conjugation-check-log? word)
+    (return-from swedish-missing-conjugation-links nil))
+  (register-in-conjugation-check-log word (get-universal-time))
   (collecting
     (destructuring-dolist ((conjugations pos)
 			   (remove-if-not #'identity
 					  (mapcar #'parse-swedish-grammar-table
 						  (scan-for-grammar-tables (swedish-grammar-table-regexes)
-									   word))))
+									   word
+									   :early-warning t))))
       (destructuring-dolist ((conjugation conjugated-words) conjugations)
 	(dolist (conjugated-word conjugated-words)
 	  (unless (or (equal conjugated-word word)
@@ -119,20 +157,38 @@
      :for number :from 1
      :do (loop
 	    :for task :in (swedish-missing-conjugation-links word)
-	    :do (push task *collected-conjugation-tasks*))
+	    :do (pushnew task *collected-conjugation-tasks* :test #'equal :key #'second))
      :do (format t "~a [collect-conjugation-tasks] processed #~a of ~a: ~a~%"
 		 (rfc3339:make-timestamp)
 		 number
 		 (length words)
 		 word)))
 
+(defun create-swedish-derivation-link (target derivation-type)
+  (assert (find derivation-type '("adj" "verb" "prespart" "perfpart") :test #'equal))
+  (concatenate 'string
+	       "{{avledning|"
+	       target
+	       "|"
+	       derivation-type
+	       "}}"))
+
+(defun swedish-new-conjugated-participle-page (base-form grammar)
+  (assert (find :participle grammar))
+  (let ((derivation-type (cond ((find :present grammar) "prespart")
+			       ((find :perfect grammar) "perfpart")
+			       (t (error "swedish-new-conjugated-participle-page: inappropriate grammar")))))
+    (format nil "==Svenska==
+===~a===
+'''{{subst:PAGENAME}}'''
+#~a" (swedish-long-pos-name :adjective) (create-swedish-derivation-link base-form derivation-type))))
+
 (defun swedish-new-conjugated-form-page (base-form type)
   (format nil "==Svenska==
 ===~a===
 '''{{subst:PAGENAME}}'''
 #~a
-
-<!--[[-->" (swedish-long-pos-name type) (create-swedish-conjugation-link base-form type)))
+" (swedish-long-pos-name type) (create-swedish-conjugation-link base-form type)))
 
 (defun swedish-long-pos-name (type)
   (case type
@@ -160,19 +216,80 @@
 		    (format nil "Conjugation table task dry run for ~a/~a" conjugated-word base-word)
 		    :append formatted))))))
 
-(defun simple-swedish-conjugation-task (task &key (extra-delay 10))
-  (destructuring-bind (type conjugated-word base-word grammar)
-      task
-    (cond ((page-source conjugated-word)
-	   (format t "skipping ~a, page already exists" task))
-	  (t
-	   (let ((task-summary (format nil
-				       "böjningsform av [[~a]] (automatiserad)"
-				       base-word)))
-	     (api-edit conjugated-word
-		       task-summary
-		       :createonly t
-		       :minor t
-		       :append (swedish-new-conjugated-form-page base-word type)))))
-    (when extra-delay
-      (sleep extra-delay))))
+(defun make-task-summary (base-word)
+  (format nil
+	  "böjningsform av [[~a]] (automatiserad)"
+	  base-word))
+
+(defun edit-conjugation-task (type conjugated-word base-word grammar &key create-perfect-participles)
+  (when (find :participle grammar)
+    (if (and create-perfect-participles
+	       (find :perfect grammar))
+	(progn
+	  (api-edit conjugated-word
+		    (make-task-summary base-word)
+		    :createonly t
+		    :minor t
+		    :append (swedish-new-conjugated-participle-page base-word grammar))
+	  (irc-report-format "Created experimental participle ~a (conjugation of ~a)" conjugated-word base-word))
+	(let ((event (format nil "ignoring participle ~s / ~s" conjugated-word base-word)))
+	  (format t "~a~%" event)
+	  (irc-report event)))
+    (return-from edit-conjugation-task nil))
+  (api-edit conjugated-word
+	    (make-task-summary base-word)
+	    :createonly t
+	    :minor t
+	    :append (swedish-new-conjugated-form-page base-word type))
+  (irc-report-format "Created ~a (conjugation of ~a)" conjugated-word base-word))
+
+(defun perform-collected-conjugation-tasks ()
+  (simple-swedish-conjugation-tasks *collected-conjugation-tasks*)
+  (setf *collected-conjugation-tasks* nil))
+
+(defun simple-swedish-conjugation-tasks (tasks &key (extra-delay 0.5))
+  (restart-case
+      (dolist (task (filter-redlink-list (remove-if #'in-edit-log? tasks :key #'second) :key #'second))
+	(destructuring-bind (type conjugated-word base-word grammar)
+	    task
+	  (let ((task-summary (make-task-summary base-word)))
+	    (handler-case (edit-conjugation-task type conjugated-word base-word grammar)
+	      (article-already-exists ()
+		(format t "late skip pre-existing ~a~%" task)))))
+	(when extra-delay
+	  (sleep extra-delay)))
+    (retry-conjugation-tasks ()
+      :report "Retry conjugation tasks"
+      (simple-swedish-conjugation-tasks tasks :extra-delay extra-delay))))    
+
+#+commentout
+(defun simple-swedish-conjugation-task (task &key (extra-delay 0.5))
+  (restart-case
+      (destructuring-bind (type conjugated-word base-word grammar)
+	  task
+	(cond ((page-source conjugated-word)
+	       (format t "skipping ~a, page already exists~%" task))
+	      (t
+	       (let ((task-summary (make-task-summary base-word)))
+		 (handler-case
+		     (progn (api-edit conjugated-word
+				      task-summary
+				      :createonly t
+				      :minor t
+				      :append (swedish-new-conjugated-form-page base-word type))
+			    (irc-report-format "Created ~a (conjugation of ~a)" conjugated-word base-word))
+		   (article-already-exists ()
+		     (format t "skipped ~a, page already exists (but was cached as nonexistent)~%" task))))))
+	(when extra-delay
+	  (sleep extra-delay)))
+    (retry-conjugation-task ()
+      :report "Retry conjugation task"
+      (simple-swedish-conjugation-task task :extra-delay extra-delay))))
+      
+
+(defun collect-some-conjugation-tasks ()
+  (collect-conjugation-tasks
+   (swedish-pages-with-blessed-grammar-templates-in-dump
+    :sample 1000
+    :criterion #'(lambda (title) (not (in-conjugation-check-log? title))))))
+				      
