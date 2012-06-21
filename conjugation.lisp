@@ -142,6 +142,7 @@
 			      (search "(" conjugated-word)
 			      (search ")" conjugated-word))
 			  (equal conjugated-word "")))
+	    (add-to-reverse-inflect-material word conjugated-word)
 	    (let ((pattern (create-swedish-conjugation-link-pattern word pos)))
 	      (unless (and (swedish-dump-text conjugated-word)
 			   (cl-ppcre:scan pattern (swedish-dump-text conjugated-word)))
@@ -287,9 +288,9 @@
       (simple-swedish-conjugation-task task :extra-delay extra-delay))))
       
 
-(defun collect-some-conjugation-tasks ()
+(defun collect-some-conjugation-tasks (&optional (n 1000))
   (collect-conjugation-tasks
    (swedish-pages-with-blessed-grammar-templates-in-dump
-    :sample 1000
+    :sample n
     :criterion #'(lambda (title) (not (in-conjugation-check-log? title))))))
 				      

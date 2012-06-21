@@ -18,6 +18,7 @@
    (:file "tokens")
    (:file "dumps")
    (:file "tables")
+   (:file "reverse-inflect")
    (:file "conjugation")
    (:file "irc")
    (:file "unknown")
