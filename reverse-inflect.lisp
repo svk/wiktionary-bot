@@ -19,9 +19,10 @@
 
 (defun load-reverse-inflections ()
   (loop
-     :for (pattern replacement) :in (sexp-in-file *reverse-inflection-model*)
+     :for (pattern replacement correct applies) :in (sexp-in-file *reverse-inflection-model*)
      :collect (list (cl-ppcre:create-scanner pattern)
-		    replacement)))
+		    replacement
+		    (/ correct applies))))
 			     
 (defparameter *ri-regex-pairs* (load-reverse-inflections))
 
@@ -44,13 +45,19 @@
 
 
 
+(defun reverse-inflect-with-weights (inflected-word pairs)
+  (sort (let ((ht (make-hash-table :test #'equal)))
+	  (loop
+	     :for (scanner replacement weight) :in pairs
+	     :if (cl-ppcre:scan scanner inflected-word)
+	     :do (incf (gethash (cl-ppcre:regex-replace scanner inflected-word replacement) ht 0)
+		       weight))
+	  (maphash-to-unordered-list #'cons ht))
+	#'>
+	:key #'cdr))
+
 (defun reverse-inflect-with (inflected-word pairs)
-  (remove-duplicates
-   (loop
-      :for (scanner replacement) :in pairs
-      :if (cl-ppcre:scan scanner inflected-word)
-      :collect (cl-ppcre:regex-replace scanner inflected-word replacement))
-   :test #'equal))
+  (mapcar #'car (reverse-inflect-with-weights inflected-word pairs)))
 
 (defun reverse-inflect (inflected-word)
   (reverse-inflect-with inflected-word *ri-regex-pairs*))
@@ -106,33 +113,44 @@
   (with-open-file (*standard-output* *reverse-inflection-model* :direction :output :if-exists :supersede)
     (write pairs)))
 
+;; P(h|c)P(c) = P(h,c) = P(c|h)P(h)
+;; bayes P(c|h) = P(h|c)P(c)/P(h)
+;; however P(not-h|c)=0 , P(h,c) = P(c)
+;; P(c|h) = P(c)/P(h)
+
 (defun learn-reverse-inflections (challenges)
   (remove-if-not
-   #'(lambda (pair)
-       (let ((scanner (cl-ppcre:create-scanner (first pair))))
-	 (> (length (remove-if-not
-		     #'(lambda (a-c)
-			 (equal (cl-ppcre:regex-replace scanner
-							(second a-c)
-							(second pair))
-				(first a-c)))
-		     challenges))
-	    1)))
-   (remove-duplicates
-    (loop
-       :for (answer challenge) :in challenges
-       :collect (destructuring-bind (base-suffix inflection-suffix)
-		    (distinguishing-suffixes answer challenge)
-		  (list (concatenate 'string
-				     "^(.+)"
-				     inflection-suffix
-				     "$")
-			(if (equal base-suffix "")
-			    "\\1"
-			    (concatenate 'string
-					 "\\1"
-					 base-suffix)))))
-    :test #'equal)))
+   #'(lambda (x) (> x 1))
+   (mapcar
+    #'(lambda (pair)
+	(let* ((scanner (cl-ppcre:create-scanner (first pair)))
+	       (correct (length (remove-if-not
+				 #'(lambda (a-c)
+				     (equal (cl-ppcre:regex-replace scanner
+								    (second a-c)
+								    (second pair))
+					    (first a-c)))
+				 challenges)))
+	       (applies (length (remove-if-not
+				 #'(lambda (a-c) (cl-ppcre:scan scanner (second a-c)))
+				 challenges))))
+	  (append pair (list correct applies))))
+    (remove-duplicates
+     (loop
+	:for (answer challenge) :in challenges
+	:collect (destructuring-bind (base-suffix inflection-suffix)
+		     (distinguishing-suffixes answer challenge)
+		   (list (concatenate 'string
+				      "^(.+)"
+				      inflection-suffix
+				      "$")
+			 (if (equal base-suffix "")
+			     "\\1"
+			     (concatenate 'string
+					  "\\1"
+					  base-suffix)))))
+     :test #'equal))
+   :key #'third))
 
 
 (defun learn-and-save-reverse-inflections ()
