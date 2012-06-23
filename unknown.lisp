@@ -18,15 +18,29 @@
       (declare (ignore sentence title))
       (collect word))))
 
+(defun is-inflection? (word)
+  (reverse-inflect-dumps word))
+
 (let ((number-regex (cl-ppcre:create-scanner "\\d+"))
       (wordlike-regex (cl-ppcre:create-scanner "^[a-zäöå\\-]+$")))
   (defun uninteresting-word? (word)
     (or (cl-ppcre:scan number-regex word)
 	(not (cl-ppcre:scan wordlike-regex word))
+	(is-autowikibrowser-typo? word)
+	(is-inflection? word)
 	(capitalized? word))))
+
 
 (defparameter *unknown-word-sentence-taboos* (mapcar #'cl-ppcre:create-scanner
 						     '("http")))
+
+(defun scan-sentence-for-unknown-words (sentence &key (key #'identity))
+  (loop
+     :for word :in sentence
+     :if (let ((real-word (funcall key word)))
+	   (not (or (word-in-swedish-wiktionary? real-word)
+		    (uninteresting-word? real-word))))
+     :collect word))
 
 (let ((redirect-regex (cl-ppcre:create-scanner "#redirect" :case-insensitive-mode t))
       (robot-regex (cl-ppcre:create-scanner "{{robotskapad" :case-insensitive-mode t)))
@@ -103,7 +117,8 @@
      :for (pattern regex replacement) :in (autowikibrowser-typos)
      :if (equal word (cl-ppcre:scan-to-strings regex word))
      :do (let ((replacement-word (cl-ppcre:regex-replace regex word replacement)))
-	   (return-from is-autowikibrowser-typo? (not (equal replacement-word word)))))
+	   (return-from is-autowikibrowser-typo? (and (not (equal replacement-word word))
+						      replacement-word))))
   nil)
 
 (defun best-unknown-words (&key (n 100) skip)
@@ -219,3 +234,4 @@ har kommet med, slik at den ikke foreslår de samme ordene om og om igjen.
 						:filter t
 						:limit n
 						:skip skip)))
+

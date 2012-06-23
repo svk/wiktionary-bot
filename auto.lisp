@@ -127,7 +127,7 @@ Avsluttet: ~a (~a)
 		   :announce announce)
     (when (null *collected-conjugation-tasks*)
       (return))
-    (simple-swedish-conjugation-task (pop *collected-conjugation-tasks*))))
+    (simple-swedish-conjugation-tasks (list (pop *collected-conjugation-tasks*))))) ;; todo
 
 (defun full-auto-conjugation-tasks (&key (job-description "bøyningsformsartikler (helautomatisk)"))
   (let ((*collected-conjugation-tasks* nil))
@@ -136,7 +136,7 @@ Avsluttet: ~a (~a)
 		     :report t)
       (if (null *collected-conjugation-tasks*)
 	  (collect-some-conjugation-tasks)
-	  (simple-swedish-conjugation-task (pop *collected-conjugation-tasks*))))))
+	  (simple-swedish-conjugation-tasks (list (pop *collected-conjugation-tasks*))))))) ;; todo
 
 (defun full-auto-conjugation-tasks+recent-conjugation (&key (job-description "bøyningsformsartikler (helautomatisk, med overvåkning av Recent Changes)"))
   (let ((*collected-conjugation-tasks* nil)
@@ -156,10 +156,21 @@ Avsluttet: ~a (~a)
 		(setf *collected-conjugation-tasks*
 		      (reverse (filter-redlink-list *collected-conjugation-tasks* :key #'second)))
 		(setf last-rc-check (get-universal-time))
-		(irc-report (concatenate 'string "Checked RC, tasks now:" (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*)))))
+		(log-info
+		 'full-auto-conjugation-tasks+recent-conjugation
+		 "checked RC, tasks now: ~a" 
+		 (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*))))
 	      (if (null *collected-conjugation-tasks*)
 		  (progn (collect-some-conjugation-tasks)
-			 (irc-report (concatenate 'string "Collected tasks, tasks now:" (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*)))))
+			 (log-info
+			  'full-auto-conjugation-tasks+recent-conjugation
+			  "collected tasks, tasks now: ~a" 
+			  (funcall #'string-join " " (mapcar #'second *collected-conjugation-tasks*)))
+			 (when (null *collected-conjugation-tasks*)
+			   (log-warning
+			    'full-auto-conjugation-tasks+recent-conjugation
+			    "out of tasks?")
+			   (sleep (* 30 60))))
 		  #-newcode
 		  (progn (simple-swedish-conjugation-tasks *collected-conjugation-tasks*)
 			 (setf *collected-conjugation-tasks* nil))

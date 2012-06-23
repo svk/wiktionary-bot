@@ -67,16 +67,17 @@
 		(cdr (assoc :password alist)))))))
 
 (defun drakma-request (url parameters &rest args)
-  (let ((rv (apply #'drakma:http-request
-		   url
-		   :external-format-in :utf-8
-		   :external-format-out :utf-8
-		   :user-agent *user-agent*
-		   :parameters parameters
-		   :cookie-jar *cookies*
-		   args)))
-	  (wait-read)
-	  rv))
+  (let ((flex:*substitution-char* (code-char 65533)))
+    (let ((rv (apply #'drakma:http-request
+		     url
+		     :external-format-in :utf-8
+		     :external-format-out :utf-8
+		     :user-agent *user-agent*
+		     :parameters parameters
+		     :cookie-jar *cookies*
+		     args)))
+      (wait-read)
+      rv)))
 
 (defun fetch-json (url parameters &rest http-request-args)
   (let ((stream (apply #'drakma-request
@@ -116,7 +117,7 @@
 
 (defun lhtml-select (root &key name id class list)
   (if (or (null root)
-	    (stringp root))
+	  (stringp root))
       nil
       (do* ((stack (list root))
 	    (current (pop stack) (pop stack))
@@ -386,11 +387,8 @@
 				 "([()])"
 				 template-name
 				 "\\\\\\1")
-				"(|.*?)}}")))
-	(cl-ppcre:create-scanner regex)
-	#+wrong
-	#'(lambda (string)
-	    (cl-ppcre:scan regex string)))
+				"(|.*?)*?}}")))
+	(cl-ppcre:create-scanner regex))
       (concatenate 'string
 		   "template-"
 		   template-name))))
@@ -535,16 +533,22 @@
   (caddr (find (list x y) cells :test #'equal :key (papply (first-n ? 2)))))
 
 (defun lhtml->text-list (elements)
-  (cond ((listp elements)
+  (let ((newline "
+"))
+    (cond ((listp elements)
 	 (if (keywordp (car elements))
 	     (destructuring-bind (tag attrs . rest)
 		 elements
-	       (declare (ignore tag attrs))
-	       (lhtml->text-list rest))
+	       (declare (ignore attrs))
+	       (cond ((eq tag :br)
+		      (list newline))
+		     ((eq tag :p)
+		      (append (list newline) (lhtml->text-list rest) (list newline)))
+		     (t (lhtml->text-list rest))))
 	     (apply #'nconc
 		    (mapcar #'lhtml->text-list elements))))
 	((stringp elements) (list elements))
-	(t)))
+	(t))))
 
 (defun lhtml->text (elements)
   (apply #'concatenate
@@ -590,7 +594,7 @@
 				     (when value (collect (list (list ,@target) value))))))))))))
 
 (defun format-timestamp (&optional (timestamp (get-universal-time)))
-  (format "~d" timestamp))
+  (format nil "~a" (rfc3339:make-timestamp :utc-time timestamp)))
 
 (defun api-edit (title summary &key mutator prepend append minor (bot t) section createonly (retries 5) (retry-delay 5))
   (assert (or mutator prepend append))

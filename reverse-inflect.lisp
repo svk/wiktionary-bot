@@ -62,22 +62,26 @@
 (defun reverse-inflect (inflected-word)
   (reverse-inflect-with inflected-word *ri-regex-pairs*))
 
-(defun missed-challenges (challenges)
+(defun missed-challenges (challenges &key limit)
   (loop
      :for (answer challenge) :in challenges
-     :unless (find answer (reverse-inflect challenge) :test #'equal)
+     :unless (find answer (funcall (if limit
+				       (papply (first-n ? limit))
+				       #'identity)
+				   (reverse-inflect challenge))
+		   :test #'equal)
      :collect (cons challenge answer)))
      
 
-(defun missed-ri-training ()
+(defun missed-ri-training (&optional limit)
   (let* ((tr (ri-training-material))
-	 (misses (missed-challenges tr)))
+	 (misses (missed-challenges tr :limit limit)))
     (values misses
 	    (coerce (/ (length misses) (length tr)) 'float))))
 
-(defun ri-test ()
+(defun ri-test (&optional limit)
   (let ((testing-material (ri-testing-material)))
-    (coerce (/ (length (missed-challenges testing-material))
+    (coerce (/ (length (missed-challenges testing-material :limit limit))
 	       (length testing-material))
 	    'float)))
 
@@ -156,3 +160,35 @@
 (defun learn-and-save-reverse-inflections ()
   (save-reverse-inflections (learn-reverse-inflections (ri-training-material))))
 
+(defun reverse-inflect-dumps (inflected-word)
+  (remove-if-not #'swedish-dump-text
+	     (reverse-inflect inflected-word)))
+
+(defun reverse-inflect-network (inflected-word &key (limit 5) (use-dumps t))
+  (let ((candidates (reverse-inflect inflected-word)))
+    (unless (or (not use-dumps)
+		(<= (length candidates) 1))
+      (let ((new-candidates (remove-if-not #'swedish-dump-text candidates)))
+	(when new-candidates
+	  (setf candidates new-candidates))))
+    (setf candidates  (funcall (if limit
+				 (papply (first-n ? limit))
+				 #'identity)
+			       candidates))
+    (unless (<= (length candidates) 1)
+      (let ((present (mapcar #'(lambda (x) (unless (assoc :missing (cdr x)) (extract '(:title) (cdr x))))
+			     (extract '(:query :pages) (api-query :query :prop
+								  :prop :info
+								  :titles candidates)))))
+	(setf candidates (delete-if-not (papply (find ? present :test #'equal))
+					candidates))))
+    (dolist (candidate candidates)
+      (when (find inflected-word
+		  (links-from-table-cell (scan-for-grammar-tables (swedish-grammar-table-regexes)
+								  candidate
+								  :early-warning nil
+								  :fully-live t))
+		  :test #'equal)
+	(return-from reverse-inflect-network candidate)))
+    (values nil
+	    (car (reverse-inflect inflected-word)))))

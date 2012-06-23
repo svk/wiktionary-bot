@@ -246,17 +246,17 @@
 
 (defun irc-split-line (text) (%irc-split-line text))
 (defun irc-report-format (message &rest args)
-  (irc-report (apply #'format nil message args)))
+  (irc-report (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
 (defun irc-report (message)
-  (dolist (message (reverse (irc-split-line message)))
+  (dolist (message (irc-split-line message))
     (irc-privmsg *irc-report-channel*
 		 message)))
 
 (defun irc-reply-format (message &rest args)
-  (irc-reply (apply #'format nil message args)))
+  (irc-reply (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
 (defun irc-reply (message)
-  (dolist (message (reverse (irc-split-line message)))
+  (dolist (message (irc-split-line message))
     (irc-privmsg *reply-target*
 		 message)))

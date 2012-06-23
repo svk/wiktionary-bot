@@ -232,17 +232,21 @@
 		    :createonly t
 		    :minor t
 		    :append (swedish-new-conjugated-participle-page base-word grammar))
-	  (irc-report-format "Created experimental participle ~a (conjugation of ~a)" conjugated-word base-word))
-	(let ((event (format nil "ignoring participle ~s / ~s" conjugated-word base-word)))
-	  (format t "~a~%" event)
-	  (irc-report event)))
+	  (log-info 'edit-conjugation-task
+		    "created experimental participle ~a (conjugation of ~a)"
+		    conjugated-word base-word))
+	(log-info 'edit-conjugation-task
+		  "ignoring participle ~s / ~s"
+		  conjugated-word base-word))
     (return-from edit-conjugation-task nil))
   (api-edit conjugated-word
 	    (make-task-summary base-word)
 	    :createonly t
 	    :minor t
 	    :append (swedish-new-conjugated-form-page base-word type))
-  (irc-report-format "Created ~a (conjugation of ~a)" conjugated-word base-word))
+  (log-info 'edit-conjugation-taks
+	    "created ~a (conjugation of ~a)"
+	    conjugated-word base-word))
 
 (defun perform-collected-conjugation-tasks ()
   (simple-swedish-conjugation-tasks *collected-conjugation-tasks*)
