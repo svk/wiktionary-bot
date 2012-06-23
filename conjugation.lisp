@@ -267,31 +267,6 @@
       :report "Retry conjugation tasks"
       (simple-swedish-conjugation-tasks tasks :extra-delay extra-delay))))    
 
-#+commentout
-(defun simple-swedish-conjugation-task (task &key (extra-delay 0.5))
-  (restart-case
-      (destructuring-bind (type conjugated-word base-word grammar)
-	  task
-	(cond ((page-source conjugated-word)
-	       (format t "skipping ~a, page already exists~%" task))
-	      (t
-	       (let ((task-summary (make-task-summary base-word)))
-		 (handler-case
-		     (progn (api-edit conjugated-word
-				      task-summary
-				      :createonly t
-				      :minor t
-				      :append (swedish-new-conjugated-form-page base-word type))
-			    (irc-report-format "Created ~a (conjugation of ~a)" conjugated-word base-word))
-		   (article-already-exists ()
-		     (format t "skipped ~a, page already exists (but was cached as nonexistent)~%" task))))))
-	(when extra-delay
-	  (sleep extra-delay)))
-    (retry-conjugation-task ()
-      :report "Retry conjugation task"
-      (simple-swedish-conjugation-task task :extra-delay extra-delay))))
-      
-
 (defun collect-some-conjugation-tasks (&optional (n 1000))
   (collect-conjugation-tasks
    (swedish-pages-with-blessed-grammar-templates-in-dump

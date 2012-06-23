@@ -1,5 +1,14 @@
 (in-package :wiktionary-bot)
 
+
+(defvar *web-resource-lock* (mp:make-process-lock))
+(defmacro with-web (&body body)
+  `(mp:with-process-lock (*web-resource-lock*)
+     ,@body))
+(defmacro defun-web (name varlist &body body)
+  `(defun ,name ,varlist
+     (with-web ,@body)))
+
 (defparameter *web-resource-cache-master* #p"./data/web-resources-cache-master.generated.lisp")
 (defparameter *web-resource-cache-urls* #p"./data/web-resources-cache-urls.generated.lisp")
 (defparameter *web-resource-cache-template* "./data/web-resources-cache/wrcache-~a.generated.lisp")
@@ -9,12 +18,12 @@
 
 (defparameter *front-page-fetchers* nil)
 
-(defun hash-table-from-pairs (pairs &key (test #'eql))
+(defun-web hash-table-from-pairs (pairs &key (test #'eql))
   (let ((ht (make-hash-table :test test :size (length pairs))))
     (loop :for (key . value) :in pairs :do (setf (gethash key ht) value))
     ht))
 
-(defun find-sexp-in-file-satisfying (predicate filename)
+(defun-web find-sexp-in-file-satisfying (predicate filename)
   (with-open-file (*standard-input* filename
 				    :direction :input
 				    :if-does-not-exist nil)
@@ -25,26 +34,26 @@
 		       :do (return-from find-sexp-in-file-satisfying x))
 	(end-of-file () nil)))))
 
-(defun list-to-file-appending (list filename)
+(defun-web list-to-file-appending (list filename)
   (with-open-file (*standard-output* filename
 				     :direction :output :if-exists :append :if-does-not-exist :create)
     (dolist (element list)
       (write element)
       (write-char #\newline))))
 
-(defun list-to-file-creating (list filename)
+(defun-web list-to-file-creating (list filename)
   (with-open-file (*standard-output* filename
 				     :direction :output :if-exists :error :if-does-not-exist :create)
     (dolist (element list)
       (write element)
       (write-char #\newline))))
     
-(defun sexp-to-file-overwriting (sexp filename)
+(defun-web sexp-to-file-overwriting (sexp filename)
   (with-open-file (*standard-output* filename
 				     :direction :output :if-exists :supersede :if-does-not-exist :create)
     (write sexp)))
 
-(defun sexp-to-file-appending (sexp filename)
+(defun-web sexp-to-file-appending (sexp filename)
   (let ((*print-pretty* nil))
     (with-open-file (*standard-output* filename
 				       :direction :output :if-exists :append :if-does-not-exist :create)
@@ -57,17 +66,17 @@
 
 (defvar *web-resource-cache* (make-hash-table :test #'equal))
 
-(defun clear-web-resource-cache ()
+(defun-web clear-web-resource-cache ()
   (setf *web-resource-cache* (make-hash-table :test #'equal)))
 
-(defun retrieve-from-disk-cache (url)
+(defun-web retrieve-from-disk-cache (url)
   (let ((cache-filename (gethash url *urls-cached-on-disk*)))
     (when cache-filename
       (find-sexp-in-file-satisfying #'(lambda (key-value)
 					(equal (car key-value) url))
 				    cache-filename))))
 
-(defun memory-web-resources-statistics ()
+(defun-web memory-web-resources-statistics ()
   (maphash-to-unordered-list #'cons
 			     (let ((ht (make-hash-table :test #'equal)))
 			       (loop
@@ -82,7 +91,7 @@
 					(when valid (incf (car cons)))))
 			       ht)))	    
 
-(defun flush-web-resource-cache-to-disk ()
+(defun-web flush-web-resource-cache-to-disk ()
   (let* ((no (or (sexp-in-file *web-resource-cache-master*) 1))
 	 (filename (format nil *web-resource-cache-template* no)))
     (log-info 'flush-web-resource-cache-to-disk
@@ -108,7 +117,7 @@
     (clear-web-resource-cache)))
     
 
-(defun web-resource-valid? (resource)
+(defun-web web-resource-valid? (resource)
   (cond ((empty? (extract '(:text) resource))
 	 (values nil "Missing text"))
 	((empty? (extract '(:url) resource))
@@ -119,13 +128,17 @@
 	 (values nil "Missing title"))
 	(t resource)))
 
-(defun cached-web-resources ()
+(defun-web cached-web-resources ()
   (remove-if-not #'web-resource-valid?
 		 (hash-table-values *web-resource-cache*)))
 
-(defun fetch-web-resource (fetcher url)
+(defun-web fetch-cached-web-resource (url)
   (or (gethash url *web-resource-cache*)
-      (retrieve-from-disk-cache url)
+      (retrieve-from-disk-cache url)))
+
+(defun-web fetch-web-resource (fetcher url)
+  (or (values (fetch-cached-web-resource url)
+	      nil)
       (let ((result (setf (gethash url *web-resource-cache*)
 			  (funcall fetcher url))))
 	(unless *web-resource-quiet*
@@ -135,21 +148,22 @@
 	(when (>= (hash-table-count *web-resource-cache*)
 		  *web-resource-cache-memory-limit*)
 	  (flush-web-resource-cache-to-disk))
-	result)))
+	(values result
+		t))))
 
-(defun filter-many (html argss)
+(defun-web filter-many (html argss)
   (dolist (args argss)
     (setf html (apply #'lhtml-filter
 		      html
 		      args)))
   html)    
 
-(defun filter-nontextual-html (html)
+(defun-web filter-nontextual-html (html)
   (filter-many html '((:name :ul)
 		      (:name :script)
 		      (:name :li))))
 
-(defun fetch-gp.se-article (url)
+(defun-web fetch-gp.se-article (url)
   (let ((html (parse-html (drakma-request url nil))))
     (list
      (cons :title (trim (third (lhtml-select html
@@ -171,7 +185,7 @@
 				    (lhtml->text (lhtml-select html
 							       :class "body"))))))))
 
-(defun fetch-gp.se-front-page ()
+(defun-web fetch-gp.se-front-page ()
   (let ((url-type (cl-ppcre:create-scanner "^/(?:[a-z]+/)*?[0-9]+\\.[0-9]+-[\\w-]+$")))
     (values (remove-duplicates
 	     (collecting
@@ -190,7 +204,7 @@
 	    #'fetch-gp.se-article
 	    :swedish)))
 
-(defun lhtml-filter (root &key name id class)
+(defun-web lhtml-filter (root &key name id class)
   (if (or (null root)
 	  (stringp root))
       root
@@ -207,11 +221,11 @@
 
 (let ((whitespace-regex (cl-ppcre:create-scanner "\\s+"))
       (newline-regex (cl-ppcre:create-scanner "\\n+")))
-  (defun cleanup-whitespace-single-line (&rest strings)
+  (defun-web cleanup-whitespace-single-line (&rest strings)
     (trim (cl-ppcre:regex-replace-all whitespace-regex
 				      (string-join " " strings)
 				      " ")))
-  (defun cleanup-whitespace (&rest strings)
+  (defun-web cleanup-whitespace (&rest strings)
     (remove-if (papply (equal ? ""))
 	       (mapcar #'(lambda (paragraph)
 			   (trim (cl-ppcre:regex-replace-all whitespace-regex paragraph " ")
@@ -222,7 +236,7 @@
 						   (cl-ppcre:split newline-regex string))
 					       strings))))))
 
-(defun fetch-svd.se-article (url)
+(defun-web fetch-svd.se-article (url)
   (let ((html (lhtml-filter (parse-html (drakma-request url nil))
 			    :name :script)))
     (list (cons :source "Svenska Dagbladet")
@@ -254,7 +268,7 @@
 			     published
 			     updated)
   `(progn
-     (defun ,article-function (url)
+     (defun-web ,article-function (url)
        (let* ((raw-html (parse-html (drakma-request url nil)))
 	      (html (filter-nontextual-html raw-html)))
 	 (append (list (cons :source ,source-name)
@@ -276,7 +290,7 @@
 		 (let ((x (cleanup-whitespace-single-line ,@published)))
 		   (when (and x (not (equal "" x)))
 		     (list (cons :published x)))))))
-     (defun ,front-page-function ()
+     (defun-web ,front-page-function ()
        (let ((url-type (cl-ppcre:create-scanner ,url-regex)))
 	 (values (remove-duplicates
 		  (collecting
@@ -299,7 +313,7 @@
      (push #',front-page-function *front-page-fetchers*)))
 				 
 
-(defun fetch-svd.se-front-page ()
+(defun-web fetch-svd.se-front-page ()
   (let ((url-type (cl-ppcre:create-scanner "^http://www.svd.se/(?:[a-z]+/)+[\\w-]+_[0-9]+\\.svd$")))
     (values (remove-duplicates 
 	     (collecting
@@ -316,7 +330,7 @@
 	    #'fetch-svd.se-article
 	    :swedish)))
   
-(defun fetch-from-front-pages (fetchers &key languages)
+(defun-web fetch-from-front-pages (fetchers &key languages)
   (log-info 'fetch-from-front-pages
 	    "fetching from front pages (languages ~a): ~a" languages fetchers)
   (let ((*delay-read* 5.0))
@@ -324,10 +338,67 @@
       (dolist (fetcher fetchers)
 	(multiple-value-bind (urls article-fetcher language)
 	    (funcall fetcher)
-	  (when (or (null languages)
-		    (find language languages))
-	    (dolist (url urls)
-	      (collect (funcall #'fetch-web-resource article-fetcher url)))))))))
+	  (let ((will-continue (or (null languages)
+				   (find language languages))))
+	    (log-info 'fetch-from-front-pages
+		      "checked front page ~a, ~a results in ~a (continuing? ~a)"
+		      fetcher
+		      (length urls)
+		      language
+		      will-continue)
+	    (when will-continue
+	      (dolist (url urls)
+		(collect (funcall #'fetch-web-resource article-fetcher url))))))))))
+
+(defun make-fetch-from-front-pages-continuation (fetchers &key languages)
+  #'(lambda (reschedule-continuation done-continuation)
+      (macrolet ((future (&body body)
+		   `#'(lambda (reschedule-continuation done-continuation)
+			,@body))
+		 (go-on (future)
+		   `(funcall reschedule-continuation
+			     5.0
+			     ,future)))
+	(log-info 'fetch-from-front-pages
+		  "fetching from front pages (languages ~a): ~a" languages fetchers)
+	(labels ((process-fetchers (fetchers)
+		   (destructuring-bind (fetcher . rest-of-fetchers)
+		       fetchers
+		     (multiple-value-bind (urls article-fetcher language)
+			 (funcall fetcher)
+		       (let ((will-continue (or (null languages)
+						(find language languages))))
+		       (log-info 'fetch-from-front-pages-continuation
+				 "checked front page ~a, ~a results in ~a (continuing? ~a)"
+				 fetcher
+				 (length urls)
+				 language
+				 will-continue)
+		       (labels ((out-of-urls ()
+				  (if rest-of-fetchers
+				      (go-on (future (process-fetchers rest-of-fetchers)))
+				      (funcall done-continuation))))
+			 (if (and urls will-continue)
+			     (go-on (future (process-urls article-fetcher
+							  urls
+							  #'out-of-urls)))
+			     (funcall #'out-of-urls)))))))
+	       (process-urls (article-fetcher urls done-continuation)
+		 (if (null urls)
+		     (funcall done-continuation)
+		     (destructuring-bind (url . rest-of-urls)
+			 urls
+		       (multiple-value-bind (resource accessed-network)
+			   (fetch-web-resource article-fetcher url)
+			 (declare (ignore resource))
+			 (if rest-of-urls
+			     (funcall reschedule-continuation
+				      (if accessed-network
+					  5.0
+					  0)
+				      (future (process-urls article-fetcher rest-of-urls done-continuation)))
+			     (funcall done-continuation)))))))
+	(process-fetchers fetchers)))))
 
 (def-media-fetcher (fetch-hbl.fi-front-page
 		    fetch-hbl.fi-article
@@ -346,31 +417,31 @@
 					:name :div
 					:class "views-field-uid"))))
 
-(defun string-upcase-first (string)
+(defun-web string-upcase-first (string)
   (concatenate 'string
 	       (string-upcase (subseq string 0 1))
 	       (subseq string 1)))
 
 (let ((whitespace (cl-ppcre:create-scanner "\\b")))
-  (defun titlecase (string)
+  (defun-web titlecase (string)
     (let ((words (cl-ppcre:split whitespace string)))
       (apply #'concatenate
 	     'string
 	     (mapcar #'string-upcase-first words)))))
 
-(defun titlecase-if-all-lowercase (string)
+(defun-web titlecase-if-all-lowercase (string)
   (if (every #'(lambda (ch) (not (upper-case-p ch)))
 	     (coerce string 'list))
       (titlecase string)
       string))
 
-(defun lhtml-attribute (root name)
+(defun-web lhtml-attribute (root name)
   (destructuring-bind (tag-name attrs . contents)
       root
     (declare (ignore tag-name contents))
     (cdr (assoc name attrs))))
 
-(defun empty? (string)
+(defun-web empty? (string)
   (or (null string)
       (equal "" string)))
 
@@ -462,16 +533,16 @@
 										     :class "prefix")))))
 					 " ")))
 
-(defun fetch-from-standard-front-pages (&key (languages '(:swedish)))
+(defun-web fetch-from-standard-front-pages (&key (languages '(:swedish)))
   (fetch-from-front-pages (append *front-page-fetchers*
 				  (list #'fetch-gp.se-front-page
 					#'fetch-svd.se-front-page))
 			  :languages languages))
 
-(defun indexed-sentence-words (sentence)
+(defun-web indexed-sentence-words (sentence)
   (mapcar #'second (third sentence)))
 
-(defun article-sentences (text)
+(defun-web article-sentences (text)
   (when (consp text)
     (return-from article-sentences
       (apply #'append
@@ -489,7 +560,7 @@
 				(list (car b-e) (chunk b-e)))
 			    begin-ends)))))
 
-(defun highlight-in (text begin end &optional (begin-marker "**") end-marker)
+(defun-web highlight-in (text begin end &optional (begin-marker "**") end-marker)
   (let ((end-marker (or end-marker begin-marker)))
     (concatenate 'string
 		 (subseq text 0 begin)
@@ -498,12 +569,12 @@
 		 end-marker
 		 (subseq text end))))
 
-(defun web-resource-unknown-words (resource)
+(defun-web web-resource-unknown-words (resource)
   (cons (cons :unknown (article-unknown-words (cdr (assoc :text resource))))
 	resource))
 	  
 
-(defun article-unknown-words (text)
+(defun-web article-unknown-words (text)
   (collecting
     (dolist (sentence (article-sentences text))
       (destructuring-bind (sentence-begin sentence-end indexed-words)
@@ -516,7 +587,7 @@
 			   (- word-begin sentence-begin)
 			   (+ (length word) (- word-begin sentence-begin))))))))))
 
-(defun collect-media-loop (&key (languages '(:swedish)) (interval (* 60 30)))
+(defun-web collect-media-loop (&key (languages '(:swedish)) (interval (* 60 30)))
   (loop :do (progn
 	      (fetch-from-standard-front-pages :languages languages)
 	      (log-info 'collect-media-loop "sleeping for ~a seconds" interval)

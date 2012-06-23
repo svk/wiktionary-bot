@@ -1,5 +1,9 @@
 (in-package :wiktionary-bot)
 
+(define-module-lock *irc-lock*
+    with-irc
+  defun-irc)
+
 (defparameter *default-nickname* "MetallManul")
 (defparameter *default-realname* "MetallManul")
 (defparameter *default-username* "MetallManul")
@@ -13,7 +17,7 @@
 (defparameter *irc-values* (make-hash-table :test #'equal))
 
 (defmacro defirc (name args &body body)
-  `(defun ,name ,args
+  `(defun-irc ,name ,args
      (when *irc-process*
        (if *in-irc-thread?*
 	   (progn ,@body nil)
@@ -41,16 +45,16 @@
 
 (defparameter *irc-persistent-storage* #p"./data/irc-storage.lisp")
 			    
-(defun irc-get-value (name)
+(defun-irc irc-get-value (name)
   (gethash name *irc-values*))
 
-(defun irc-set-value (name value)
+(defun-irc irc-set-value (name value)
   (setf (gethash name *irc-values*) value))
 
 (defvar *irc-connection* nil)
 (defvar *irc-process* nil)
 
-(defun parse-irc-input (text)
+(defun-irc parse-irc-input (text)
   (when (begins-with *command-token* text)
     (let ((*read-eval* nil)
 	  (*readtable* *irc-readtable*))
@@ -61,7 +65,7 @@
 	  (handler-case (loop :do (collect (read f)))
 	    (end-of-file ())))))))
 
-(defun begin-irc (&optional (filename #p"./data/bot-irc.info"))
+(defun-irc begin-irc (&optional (filename #p"./data/bot-irc.info"))
   (let ((*read-eval* nil))
     (with-open-file (f filename :direction :input)
       (let ((alist (read f)))
@@ -85,7 +89,7 @@
 (defparameter *source-channel* nil)
 (defparameter *reply-target* nil)
 
-(defun report-editcounts (&rest users)
+(defun-irc report-editcounts (&rest users)
   (let ((users (or users (list "MetallmanulBot"))))
     (irc-reply-format "Requesting edit counts for: ~a" (string-join " " users))
     (dolist (entry (extract '(:query :users) (api-query :list :users :ususers users :usprop :editcount)))
@@ -97,7 +101,7 @@
 (define-condition irc-command-error (error)
   ((text :reader text :initarg :text)))
 
-(defun bot-op (&rest targets)
+(defun-irc bot-op (&rest targets)
   (if (null targets)
       (setf targets (list *source-nick*)))
   (when *source-channel*
@@ -129,13 +133,13 @@
        (*irc-readtable* *source-nick* *source-host* *source-channel* *reply-target* *blessed-functions* *irc-function-table*)
      ,@body))
 
-(defun irc-function (name)
+(defun-irc irc-function (name)
   (let ((name (string-upcase (symbol-name name))))
     (or (gethash name *irc-function-table*)
 	(signal 'irc-command-error :text (format nil "function not found: ~a" name)))))
 
 
-(defun irc-eval (sexp)
+(defun-irc irc-eval (sexp)
   (cond ((or (stringp sexp)
 	     (numberp sexp)) sexp)
 	((symbolp sexp) (symbol-name sexp))
@@ -153,7 +157,7 @@
 			       (mapcar #'irc-eval args))))))
 	(t (signal 'irc-command-error "unexpected sexp ~a" sexp))))
 		       
-(defun irc-do (sexp)
+(defun-irc irc-do (sexp)
   (handler-case
       (let ((result (irc-eval sexp)))
 	(when result
@@ -161,7 +165,7 @@
     (irc-command-error (condition)
       (irc-reply-format "~a: error -- ~a" *source-nick* (with-slots (text) condition text)))))
 
-(defun irc-input (message)
+(defun-irc irc-input (message)
   (in-package :wiktionary-bot)
   (let* ((source-host (cl-irc:host message))
 	 (source-nick (cl-irc:source message))
@@ -182,9 +186,9 @@
 			   (irc-do sexp))))
 		     sexps))))
 
-(defun irc-input-base (message) (irc-input message))
+(defun-irc irc-input-base (message) (irc-input message))
 
-(defun begin-irc-as (&key server port password (nickname "MetallManulBot") (channels '("#MetallManulBot")) (realname "MetallmanulBot") (username "metallmanulbot") foreground)
+(defun-irc begin-irc-as (&key server port password (nickname "MetallManulBot") (channels '("#MetallManulBot")) (realname "MetallmanulBot") (username "metallmanulbot") foreground)
   (let ((connection (cl-irc:connect :username username
 				    :realname realname
 				    :nickname nickname
@@ -205,21 +209,21 @@
 							 (let ((*in-irc-thread?* t))
 							   (cl-irc:read-message-loop connection))))))))
 
-(defun stop-irc ()
+(defun-irc stop-irc ()
   (ignore-errors (irc-quit "Stopping"))
   (setf *irc-connection* nil)
   (when *irc-process*
     (mp:process-kill *irc-process*))
   (setf *irc-process* nil))
 
-(defun restart-irc ()
+(defun-irc restart-irc ()
   (stop-irc)
   (begin-irc))
 
-(defun number-of-articles ()
+(defun-irc number-of-articles ()
   (extract '(:query :statistics :articles) (api-query :meta :siteinfo :siprop :statistics)))
 
-(defun message-channel-articles (channel)
+(defun-irc message-channel-articles (channel)
   (irc-privmsg channel
 	       (format nil
 		       "~a: ~a articles" 
@@ -232,7 +236,7 @@
 (defparameter *irc-split-suffix* "…")
 (defparameter *irc-split-prefix* "    ")
 
-(defun %irc-split-line (text &optional prefix)
+(defun-irc %irc-split-line (text &optional prefix)
   (if (<= (length text) *irc-line-length*)
       (list (concatenate 'string
 			 (if prefix *irc-split-prefix* "")
@@ -244,19 +248,19 @@
 			   *irc-split-suffix*)
 	      (%irc-split-line (subseq text content-len) t)))))
 
-(defun irc-split-line (text) (%irc-split-line text))
-(defun irc-report-format (message &rest args)
+(defun-irc irc-split-line (text) (%irc-split-line text))
+(defun-irc irc-report-format (message &rest args)
   (irc-report (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
-(defun irc-report (message)
+(defun-irc irc-report (message)
   (dolist (message (irc-split-line message))
     (irc-privmsg *irc-report-channel*
 		 message)))
 
-(defun irc-reply-format (message &rest args)
+(defun-irc irc-reply-format (message &rest args)
   (irc-reply (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
-(defun irc-reply (message)
+(defun-irc irc-reply (message)
   (dolist (message (irc-split-line message))
     (irc-privmsg *reply-target*
 		 message)))

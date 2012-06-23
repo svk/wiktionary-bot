@@ -13,6 +13,10 @@
   :serial t
   :components
   ((:file "package")
+   (:file "locks")
+   (:file "queue")
+   (:file "log")
+   (:file "cqueue")
    (:file "wiktionary")
    (:file "markup")
    (:file "tokens")
@@ -20,9 +24,11 @@
    (:file "tables")
    (:file "reverse-inflect")
    (:file "conjugation")
+   (:file "media")
    (:file "irc")
    (:file "unknown")
    (:file "auto")
+   (:file "tasks")
    (:file "recent")))
 	       
   
