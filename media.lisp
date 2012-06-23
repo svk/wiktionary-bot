@@ -368,26 +368,32 @@
 			 (funcall fetcher)
 		       (let ((will-continue (or (null languages)
 						(find language languages))))
-		       (log-info 'fetch-from-front-pages-continuation
-				 "checked front page ~a, ~a results in ~a (continuing? ~a)"
-				 fetcher
-				 (length urls)
-				 language
-				 will-continue)
-		       (labels ((out-of-urls ()
-				  (if rest-of-fetchers
-				      (go-on (future (process-fetchers rest-of-fetchers)))
-				      (funcall done-continuation))))
-			 (if (and urls will-continue)
-			     (go-on (future (process-urls article-fetcher
-							  urls
-							  #'out-of-urls)))
-			     (funcall #'out-of-urls)))))))
-	       (process-urls (article-fetcher urls done-continuation)
-		 (if (null urls)
-		     (funcall done-continuation)
-		     (destructuring-bind (url . rest-of-urls)
-			 urls
+			 (log-info 'fetch-from-front-pages-continuation
+				   "checked front page ~a, ~a results in ~a (continuing? ~a)"
+				   fetcher
+				   (length urls)
+				   language
+				   will-continue)
+			 (labels ((out-of-urls ()
+				    (log-info 'fetch-from-front-pages-continuation
+					      "out of urls, rest of fetchers: ~a"
+					      rest-of-fetchers)
+				    (if rest-of-fetchers
+					(go-on (future (process-fetchers rest-of-fetchers)))
+					(funcall done-continuation))))
+			   (if (and urls will-continue)
+			       (progn (log-info 'fetch-yay
+						"wooah ~a"
+						#'out-of-urls)
+				      (go-on (future (process-urls article-fetcher
+								   urls
+								   #'out-of-urls))))
+			       (funcall #'out-of-urls)))))))
+		 (process-urls (article-fetcher urls process-urls-done)
+		   (if (null urls)
+		       (funcall process-urls-done)
+		       (destructuring-bind (url . rest-of-urls)
+			   urls
 		       (multiple-value-bind (resource accessed-network)
 			   (fetch-web-resource article-fetcher url)
 			 (declare (ignore resource))
@@ -396,8 +402,8 @@
 				      (if accessed-network
 					  5.0
 					  0)
-				      (future (process-urls article-fetcher rest-of-urls done-continuation)))
-			     (funcall done-continuation)))))))
+				      (future (process-urls article-fetcher rest-of-urls process-urls-done)))
+			     (funcall process-urls-done)))))))
 	(process-fetchers fetchers)))))
 
 (def-media-fetcher (fetch-hbl.fi-front-page
