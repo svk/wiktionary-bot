@@ -69,10 +69,11 @@
 			 "scheduling task ~a in ~a seconds"
 			 future
 			 delay)
-	     (schedule #'(lambda ()
-			   (funcall future
-				    #'schedule-next
-				    #'repeat-or-stop))
-		       delay)))
-    (funcall #'schedule-next 0 task)))
+	     (schedule future delay)))
+    (schedule #'(lambda ()
+		  (funcall task
+			   #'schedule-next
+			   #'repeat-or-stop))
+	      0)))
+
 		

@@ -350,61 +350,71 @@
 	      (dolist (url urls)
 		(collect (funcall #'fetch-web-resource article-fetcher url))))))))))
 
+(defun rotate (list)
+  (append (cdr list) (list (car list))))
+
+(defun %mapcar-by-continuation (continue-later result-function function lists &optional acc)
+  (if (null (car lists))
+      (funcall result-function (reverse acc))
+      (funcall continue-later
+	       #'(lambda ()
+		   (%mapcar-by-continuation continue-later
+					    result-function
+					    function
+					    (mapcar #'cdr lists)
+					    (cons (apply #'funcall function (mapcar #'car lists))
+						  acc))))))
+
+(defun mapcar-by-continuation (continue-later result-function function &rest lists)
+  (%mapcar-by-continuation continue-later
+			   result-function
+			   function
+			   lists))  
+
 (defun make-fetch-from-front-pages-continuation (fetchers &key languages)
   #'(lambda (reschedule-continuation done-continuation)
-      (macrolet ((future (&body body)
-		   `#'(lambda (reschedule-continuation done-continuation)
-			,@body))
-		 (go-on (future)
-		   `(funcall reschedule-continuation
-			     5.0
-			     ,future)))
-	(log-info 'fetch-from-front-pages
-		  "fetching from front pages (languages ~a): ~a" languages fetchers)
-	(labels ((process-fetchers (fetchers)
-		   (destructuring-bind (fetcher . rest-of-fetchers)
-		       fetchers
-		     (multiple-value-bind (urls article-fetcher language)
-			 (funcall fetcher)
-		       (let ((will-continue (or (null languages)
-						(find language languages))))
-			 (log-info 'fetch-from-front-pages-continuation
-				   "checked front page ~a, ~a results in ~a (continuing? ~a)"
-				   fetcher
-				   (length urls)
-				   language
-				   will-continue)
-			 (labels ((out-of-urls ()
-				    (log-info 'fetch-from-front-pages-continuation
-					      "out of urls, rest of fetchers: ~a"
-					      rest-of-fetchers)
-				    (if rest-of-fetchers
-					(go-on (future (process-fetchers rest-of-fetchers)))
-					(funcall done-continuation))))
-			   (if (and urls will-continue)
-			       (progn (log-info 'fetch-yay
-						"wooah ~a"
-						#'out-of-urls)
-				      (go-on (future (process-urls article-fetcher
-								   urls
-								   #'out-of-urls))))
-			       (funcall #'out-of-urls)))))))
-		 (process-urls (article-fetcher urls process-urls-done)
-		   (if (null urls)
-		       (funcall process-urls-done)
-		       (destructuring-bind (url . rest-of-urls)
-			   urls
-		       (multiple-value-bind (resource accessed-network)
-			   (fetch-web-resource article-fetcher url)
-			 (declare (ignore resource))
-			 (if rest-of-urls
-			     (funcall reschedule-continuation
-				      (if accessed-network
-					  5.0
-					  0)
-				      (future (process-urls article-fetcher rest-of-urls process-urls-done)))
-			     (funcall process-urls-done)))))))
-	(process-fetchers fetchers)))))
+      (log-info 'fetch-from-front-pages
+		"fetching from front pages (languages ~a): ~a" languages fetchers)
+	(labels ((process-url-collections (article-fetchers urlsets)
+		   (if (null (car urlsets))
+		       (if (null (cdr urlsets))
+			   (funcall done-continuation)
+			   (funcall reschedule-continuation
+				    0
+				    #'(lambda ()
+					(process-url-collections (cdr article-fetchers)
+								 (cdr urlsets)))))
+		       (let ((article-fetcher (car article-fetchers))
+			     (url (caar urlsets))
+			     (next-article-fetchers (rotate article-fetchers))
+			     (next-urlsets (append (cdr urlsets) (list (cdar urlsets)))))
+			 (multiple-value-bind (resource accessed-network)
+			     (fetch-web-resource article-fetcher url)
+			   (declare (ignore resource))
+			   (log-detail 'fetch-from-front-pages-continuation
+				       "fetch-web-resource ~a ~a (~a)"
+				       article-fetcher
+				       url
+				       accessed-network)
+			   (funcall reschedule-continuation
+				    (if accessed-network 5.0 0)
+				    #'(lambda ()
+					(process-url-collections next-article-fetchers
+								 next-urlsets)))))))
+		 (process-fetchers-sideways (front-page-fetchers)
+		   (mapcar-by-continuation 
+		    (papply (funcall reschedule-continuation 5.0 ?))
+		    #'(lambda (af-urls)
+			(process-url-collections (mapcar #'car af-urls)
+						 (mapcar #'cdr af-urls)))
+		    #'(lambda (front-page-fetcher)
+			(multiple-value-bind (urls article-fetcher language)
+			    (funcall front-page-fetcher)
+			  (when (or (null languages)
+				    (find language languages))
+			    (cons article-fetcher urls))))
+		    front-page-fetchers)))
+	(process-fetchers-sideways fetchers))))
 
 (def-media-fetcher (fetch-hbl.fi-front-page
 		    fetch-hbl.fi-article
