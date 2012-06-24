@@ -57,6 +57,11 @@
       (reschedule-after interval))
     (stop-emergency-page-tasks))
 
+(defun start-collect-media-task (&key (languages '(:swedish)) (interval (* 60 30)))
+  (run-continuation-task (make-fetch-from-standard-front-pages-continuation :languages languages)
+			 :repeat-interval interval))
+
+#+fdjsk									
 (defun-task
     (start-collect-media-task (&key (languages '(:swedish)) (interval (* 60 30)))
       (fetch-from-standard-front-pages :languages languages)

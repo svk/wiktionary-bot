@@ -57,6 +57,9 @@
 (defun-log log-test (origin format &rest values)
   (apply #'log-event :test origin format values))
 
+(defun-log log-debug (origin format &rest values)
+  (apply #'log-event :debug origin format values))
+
 (defun-log log-warning (origin format &rest values)
   (apply #'log-event :warning origin format values))
 

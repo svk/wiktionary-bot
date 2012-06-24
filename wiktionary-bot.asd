@@ -17,6 +17,7 @@
    (:file "queue")
    (:file "log")
    (:file "cqueue")
+   (:file "lhtml")
    (:file "wiktionary")
    (:file "markup")
    (:file "tokens")

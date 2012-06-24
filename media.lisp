@@ -13,10 +13,14 @@
 (defparameter *web-resource-cache-urls* #p"./data/web-resources-cache-urls.generated.lisp")
 (defparameter *web-resource-cache-template* "./data/web-resources-cache/wrcache-~a.generated.lisp")
 
-(defparameter *web-resource-cache-memory-limit* 500)
+(defparameter *web-resource-cache-memory-limit* 100)
 (defparameter *web-resource-quiet* nil)
 
+
+(defparameter *article-fetchers* nil)
+
 (defparameter *front-page-fetchers* nil)
+
 
 (defun-web hash-table-from-pairs (pairs &key (test #'eql))
   (let ((ht (make-hash-table :test test :size (length pairs))))
@@ -37,6 +41,13 @@
 (defun-web list-to-file-appending (list filename)
   (with-open-file (*standard-output* filename
 				     :direction :output :if-exists :append :if-does-not-exist :create)
+    (dolist (element list)
+      (write element)
+      (write-char #\newline))))
+
+(defun-web list-to-file-overwriting (list filename)
+  (with-open-file (*standard-output* filename
+				     :direction :output :if-exists :supersede :if-does-not-exist :create)
     (dolist (element list)
       (write element)
       (write-char #\newline))))
@@ -66,15 +77,30 @@
 
 (defvar *web-resource-cache* (make-hash-table :test #'equal))
 
+
+(defun-web rename-web-resource-cache-file (old-filename new-filename)
+  (labels ((f (name) (if (equal name old-filename)
+			 new-filename
+			 name)))
+    (excl.osi:rename old-filename new-filename)
+    (list-to-file-overwriting (mapcar #'(lambda (entry)
+					  (destructuring-bind (url . filename)
+					      entry
+					    (cons url (f filename))))
+				      (list-in-file *web-resource-cache-urls*))
+			      *web-resource-cache-urls*)
+    (setf *urls-cached-on-disk* (hash-table-from-pairs (list-in-file *web-resource-cache-urls*)
+						       :test #'equal))))
+  
 (defun-web clear-web-resource-cache ()
   (setf *web-resource-cache* (make-hash-table :test #'equal)))
 
 (defun-web retrieve-from-disk-cache (url)
   (let ((cache-filename (gethash url *urls-cached-on-disk*)))
     (when cache-filename
-      (find-sexp-in-file-satisfying #'(lambda (key-value)
-					(equal (car key-value) url))
-				    cache-filename))))
+      (cdr (find-sexp-in-file-satisfying #'(lambda (key-value)
+					     (equal (car key-value) url))
+					 cache-filename)))))
 
 (defun-web memory-web-resources-statistics ()
   (maphash-to-unordered-list #'cons
@@ -163,62 +189,6 @@
 		      (:name :script)
 		      (:name :li))))
 
-(defun-web fetch-gp.se-article (url)
-  (let ((html (parse-html (drakma-request url nil))))
-    (list
-     (cons :title (trim (third (lhtml-select html
-					     :name :h1
-					     :id "articleHeader"))))
-     (cons :source "Göteborgs-Posten")
-     (cons :author (lhtml->text (lhtml-select (lhtml-select html
-							    :name :div
-							    :class "bylineContent")
-					      :name :span
-					      :class "name")))
-     (cons :language :swedish)
-     (cons :retrieved (get-universal-time))
-     (cons :url url)
-     (cons :text (trim (concatenate 'string
-				    (lhtml->text (lhtml-select html
-							       :id "articlePreamble"))
-				    " "
-				    (lhtml->text (lhtml-select html
-							       :class "body"))))))))
-
-(defun-web fetch-gp.se-front-page ()
-  (let ((url-type (cl-ppcre:create-scanner "^/(?:[a-z]+/)*?[0-9]+\\.[0-9]+-[\\w-]+$")))
-    (values (remove-duplicates
-	     (collecting
-	       (dolist (entry (lhtml-select (parse-html (drakma-request "http://www.gp.se" nil))
-					    :list t
-					    :name :A))
-		 (destructuring-bind (name attrs . contents)
-		     entry
-		   (declare (ignore contents name))
-		   (let ((href (second (assoc :href attrs))))
-		     (when (cl-ppcre:scan url-type href)
-		       (collect (concatenate 'string
-					     "http://www.gp.se"
-					     href)))))))
-	     :test #'equal)
-	    #'fetch-gp.se-article
-	    :swedish)))
-
-(defun-web lhtml-filter (root &key name id class)
-  (if (or (null root)
-	  (stringp root))
-      root
-      (destructuring-bind (tag-name attrs . contents)
-	  root
-	(list* tag-name
-	       attrs
-	       (merge-adjacent-strings
-		(mapcar (papply (lhtml-filter ? :name name :id id :class class))
-			(remove-if #'(lambda (element)
-				       (and (not (stringp element))
-					    (lhtml-matches? element :name name :id id :class class)))
-				   contents)))))))
-
 (let ((whitespace-regex (cl-ppcre:create-scanner "\\s+"))
       (newline-regex (cl-ppcre:create-scanner "\\n+")))
   (defun-web cleanup-whitespace-single-line (&rest strings)
@@ -236,31 +206,16 @@
 						   (cl-ppcre:split newline-regex string))
 					       strings))))))
 
-(defun-web fetch-svd.se-article (url)
-  (let ((html (lhtml-filter (parse-html (drakma-request url nil))
-			    :name :script)))
-    (list (cons :source "Svenska Dagbladet")
-	  (cons :url url)
-	  (cons :language :swedish)
-	  (cons :retrieved (get-universal-time))
-	  (cons :text (cleanup-whitespace
-		       (lhtml->text (lhtml-select html
-						  :name :p
-						  :class "preamble"))
-		       (lhtml->text (lhtml-select html
-						  :name :div
-						  :class "articletext"))))
-	  (cons :author (string-join " "
-				     (cleanup-whitespace (lhtml->text (lhtml-select html
-										    :name :p
-										    :class "author")))))
-	  (cons :title (string-join " "
-				    (cleanup-whitespace (lhtml->text (lhtml-select (lhtml-select html
-												 :name :div
-												 :id "article")
-										   :name :h1))))))))
-
-(defmacro def-media-fetcher ((front-page-function article-function base-url &key url-regex source-name language (url-prefix ""))
+(defmacro def-media-fetcher ((front-page-function
+			      article-function
+			      base-url
+			      &key
+			      url-regex
+			      use-partial-url
+			      source-name
+			      language
+			      (include-as-standard t)
+			      (url-prefix ""))
 			     &key
 			     title
 			     author
@@ -301,34 +256,73 @@
 			  entry
 			(declare (ignore name contents))
 			(let ((href (second (assoc :href attrs))))
-			  (when (cl-ppcre:scan url-type href)
-			    (collect ,(if url-prefix
-					  `(concatenate 'string
-							,url-prefix
-							href)
-					  'href)))))))
+			  (multiple-value-bind (string groups)
+			      (cl-ppcre:scan-to-strings url-type href)
+			    ,@(when (not use-partial-url)
+				    (list (list 'declare (list 'ignore 'groups))))
+			    (when string
+			      (let ((good-string ,(if use-partial-url
+						      (list 'aref 'groups 0)
+						      'href)))
+				(collect ,(if url-prefix
+					      `(concatenate 'string
+							    ,(if (eq url-prefix t)
+								 base-url
+								 url-prefix)
+							    good-string)
+					      'good-string)))))))))
 		  :test #'equal)
 		 #',article-function
 		 ,language)))
-     (push #',front-page-function *front-page-fetchers*)))
+     ,(if include-as-standard
+	  `(progn (push #',front-page-function *front-page-fetchers*)
+		  (push (cons #',article-function
+			      (cl-ppcre:create-scanner ,url-regex))
+			*article-fetchers*))
+	  nil)))
 				 
+(def-media-fetcher (fetch-gp.se-front-page
+		    fetch-gp.se-article
+		    "http://www.gp.se"
+		    :url-regex "^/(?:[a-z]+/)*?[0-9]+\\.[0-9]+-[\\w-]+$"
+		    :source-name "Göteborgs-Posten"
+		    :language :swedish
+		    :url-prefix "http://www.gp.se")
+    :text ((lhtml->text (lhtml-select html
+				      :id "articlePreamble"))
+	   (lhtml->text (lhtml-select html
+				      :class "body")))
+    :title ((third (lhtml-select html
+				 :name :h1
+				 :id "articleHeader")))
+    :author ((lhtml->text (lhtml-select (lhtml-select html
+							    :name :div
+							    :class "bylineContent")
+					      :name :span
+					      :class "name"))))
 
-(defun-web fetch-svd.se-front-page ()
-  (let ((url-type (cl-ppcre:create-scanner "^http://www.svd.se/(?:[a-z]+/)+[\\w-]+_[0-9]+\\.svd$")))
-    (values (remove-duplicates 
-	     (collecting
-	       (dolist (entry (lhtml-select (parse-html (drakma-request "http://www.svd.se" nil))
-					    :list t
-					    :name :a))
-		 (destructuring-bind (name attrs . contents)
-		     entry
-		   (declare (ignore name contents))
-		   (let ((href (second (assoc :href attrs))))
-		     (when (cl-ppcre:scan url-type href)
-		       (collect href))))))
-	     :test #'equal)
-	    #'fetch-svd.se-article
-	    :swedish)))
+(def-media-fetcher (fetch-svd.se-front-page
+		    fetch-svd.se-article
+		    "http://www.svd.se"
+		    :url-regex "^http://www.svd.se/(?:[a-z]+/)+[\\w-]+_[0-9]+\\.svd$"
+		    :source-name "Svenska Dagbladet"
+		    :language :swedish)
+    :text ((lhtml->text (lhtml-select html
+				       :name :p
+				       :class "preamble"))
+	   (lhtml->text (lhtml-select html
+				      :name :div
+				      :class "articletext")))
+    :author ((lhtml->text (lhtml-select html
+					:name :p
+					:class "author")))
+    :title ((lhtml->text (lhtml-select (lhtml-select html
+						     :name :div
+						     ::id "article")
+				       :name :h1))))
+
+    
+    
   
 (defun-web fetch-from-front-pages (fetchers &key languages)
   (log-info 'fetch-from-front-pages
@@ -371,6 +365,10 @@
 			   function
 			   lists))  
 
+(defun make-fetch-from-standard-front-pages-continuation (&key (languages '(:swedish)))
+  (make-fetch-from-front-pages-continuation (append *front-page-fetchers*)
+					    :languages languages))
+
 (defun make-fetch-from-front-pages-continuation (fetchers &key languages)
   #'(lambda (reschedule-continuation done-continuation)
       (log-info 'fetch-from-front-pages
@@ -391,11 +389,9 @@
 			 (multiple-value-bind (resource accessed-network)
 			     (fetch-web-resource article-fetcher url)
 			   (declare (ignore resource))
-			   (log-detail 'fetch-from-front-pages-continuation
-				       "fetch-web-resource ~a ~a (~a)"
-				       article-fetcher
-				       url
-				       accessed-network)
+			   (log-debug 'fetch-from-front-pages-continuation
+				      "processed URL ~a"
+				      url)
 			   (funcall reschedule-continuation
 				    (if accessed-network 5.0 0)
 				    #'(lambda ()
@@ -410,6 +406,11 @@
 		    #'(lambda (front-page-fetcher)
 			(multiple-value-bind (urls article-fetcher language)
 			    (funcall front-page-fetcher)
+			  (log-debug 'fetch-from-front-pages-continuation
+				     "~a URLs in ~a for for ~a"
+				     (length urls)
+				     language
+				     article-fetcher)
 			  (when (or (null languages)
 				    (find language languages))
 			    (cons article-fetcher urls))))
@@ -558,11 +559,11 @@
 (defun-web indexed-sentence-words (sentence)
   (mapcar #'second (third sentence)))
 
-(defun-web article-sentences (text)
+(defun-web article-indexed-sentences (text)
   (when (consp text)
-    (return-from article-sentences
+    (return-from article-indexed-sentences
       (apply #'append
-	     (mapcar #'article-sentences
+	     (mapcar #'article-indexed-sentences
 		     text))))
   (labels ((chunk (b-e) (destructuring-bind (begin . end)
 			    b-e
@@ -575,6 +576,17 @@
 		    (mapcar #'(lambda (b-e)
 				(list (car b-e) (chunk b-e)))
 			    begin-ends)))))
+
+(defun-web web-resource-indexed-sentences (web-resource)
+  (article-indexed-sentences (extract '(:text) web-resource)))
+
+(defun web-resource-unindexed-sentences (web-resource)
+  (mapcar #'indexed-sentence-words (web-resource-indexed-sentences web-resource)))
+
+(defun flatten (sequence-of-sequences)
+  (reduce #'append
+	  sequence-of-sequences
+	  :from-end t))  
 
 (defun-web highlight-in (text begin end &optional (begin-marker "**") end-marker)
   (let ((end-marker (or end-marker begin-marker)))
@@ -592,7 +604,7 @@
 
 (defun-web article-unknown-words (text)
   (collecting
-    (dolist (sentence (article-sentences text))
+    (dolist (sentence (article-indexed-sentences text))
       (destructuring-bind (sentence-begin sentence-end indexed-words)
 	  sentence
 	(dolist (indexed-word (scan-sentence-for-unknown-words indexed-words :key #'second))
@@ -608,4 +620,214 @@
 	      (fetch-from-standard-front-pages :languages languages)
 	      (log-info 'collect-media-loop "sleeping for ~a seconds" interval)
 	      (sleep interval))))
-	      
+
+(defun-web all-web-resources ()
+  (append (hash-table-values *web-resource-cache*)
+	  (maphash-to-unordered-list
+	   #'(lambda (url disk-file)
+	       (declare (ignore disk-file))
+	       (retrieve-from-disk-cache url))
+	   *urls-cached-on-disk*)))
+
+(defun-web on-all-web-resources-continuation (c-next
+					      c-finished
+					      function)
+  (let ((in-memory (maphash-to-unordered-list #'cons *web-resource-cache*))
+	(on-disk (hash-table-keys *urls-cached-on-disk*))
+	(results))
+    (labels ((process-next-in-memory (rest-of-memory)
+	       (funcall c-next
+			#'(lambda ()
+			    (if (null rest-of-memory)
+				(process-next-on-disk on-disk)
+				(progn
+				  (push (funcall function (cdar rest-of-memory)) results)
+				  (process-next-in-memory (cdr rest-of-memory)))))))
+	     (process-next-on-disk (rest-of-disk)
+	       (if (null rest-of-disk)
+		   (funcall c-finished results)
+		   (funcall c-next #'(lambda ()
+				       (push (funcall function
+						      (retrieve-from-disk-cache (car rest-of-disk)))
+					     results)
+				       (process-next-on-disk (cdr rest-of-disk)))))))
+      (funcall c-next
+	       #'(lambda ()
+		   (process-next-in-memory in-memory))))))
+
+(defun on-all-web-resources (function)
+  (let ((result-value)
+	(result-p))
+    (loop
+       :until result-p
+       :do (on-all-web-resources-continuation #'(lambda (future)
+						  (schedule future 0))
+					      #'(lambda (result)
+						  (setf result-p t
+							result-value result))
+					      function)
+       :do (sleep 0.5))
+    result-value))
+
+(defun select-substring (string regex)
+  (multiple-value-bind (match groups)
+      (cl-ppcre:scan-to-strings regex string)
+    (when match
+      (aref groups 0))))
+
+(defun debug-show-element (element &optional description)
+  (log-debug 'debug-show-element
+	     "~a: ~a"
+	     (or description "element")
+	     element)
+  element)
+
+(defun one-matching (sequence predicate &key key)
+  (let ((rv (remove-if-not predicate sequence :key key)))
+    (if (eql (length rv) 1)
+	(car rv)
+	nil)))
+
+(defun first-matching (sequence predicate &key key)
+  (car (remove-if-not predicate sequence :key key)))
+
+(defun text-contains-predicate (text)
+  #'(lambda (element)
+      (search text (lhtml->text element))))
+
+(defun one-containing-text (sequence text)
+  (one-matching sequence (text-contains-predicate text)))
+
+(defun first-containing-text (sequence text)
+  (first-matching sequence (text-contains-predicate text)))
+
+(def-media-fetcher (fetch-sydsvenskan.se-front-page
+		    fetch-sydsvenskan.se-article
+		    "http://www.sydsvenskan.se"
+		    :url-regex "^/[a-z\\-]+/[a-z\\-]+$"
+		    :url-prefix t
+		    :language :swedish
+		    :source-name "Sydsvenska Dagbladet Snällposten")
+    :title ((call-sequence html
+			   (lhtml-select :name :h1 :class "saplo:headline")
+			   (lhtml->text)))
+    :text ((call-sequence html
+			   (lhtml-select :name :div :class "saplo:lead")
+			   (lhtml->text))
+	    (call-sequence html
+			   (lhtml-select :name :div :class "saplo:body")
+			   (lhtml->text)))
+    :author ((call-sequence html
+			    (lhtml-select :name :div :class "two_column_right")
+			    (lhtml-select-list :name :p :class "toolbar")
+			    (one-containing-text "Författare")
+			    (lhtml-select :name :strong)
+			    (lhtml->text)))
+    :published ((call-sequence html
+			    (lhtml-select :name :div :class "two_column_right")
+			    (lhtml-select-list :name :p :class "toolbar")
+			    (one-containing-text "Författare")
+			    (lhtml-select-list :name :span :class "date")
+			    (one-containing-text "Publicerad")
+			    (lhtml->text)
+			    (select-substring "Publicerad ([0-9]+ \\w+ [0-9]+ [0-9]{2}\\.[0-9]{2})")))
+    :updated ((call-sequence html
+			    (lhtml-select :name :div :class "two_column_right")
+			    (lhtml-select-list :name :p :class "toolbar")
+			    (one-containing-text "Författare")
+			    (lhtml-select-list :name :span :class "date")
+			    (one-containing-text "Uppdaterad")
+			    (lhtml->text)
+			    (select-substring "Uppdaterad ([0-9]+ \\w+ [0-9]+ [0-9]{2}\\.[0-9]{2})"))))
+
+(def-media-fetcher (fetch-di.se-front-page
+		    fetch-di.se-article
+		    "http://di.se/Nyheter/"
+		    :url-regex "^(/\\w+/[0-9]{4}/[0-9]{1,2}/[0-9]{1,2}/[0-9]+/[\\w-]+/)\\?.*$"
+		    :source-name "Dagens Industri"
+		    :use-partial-url t
+		    :language :swedish
+		    :url-prefix "http://di.se")
+    :author ((call-sequence html
+			    (lhtml-select :name :div :class "content")
+			    (lhtml-select :name :div :class "sign")
+			    (lhtml-select :name :a :href '(regex "^mailto:"))
+			    (lhtml->text)))
+    :text ((call-sequence html
+			  (lhtml-select :name :div :id "articleIntro")
+			  (lhtml-filter :class "panel-float-container")
+			  (lhtml->text))
+	   (call-sequence html
+			  (lhtml-select :name :div :id "articleBody")
+			  (lhtml-filter :class "panel-float-container")
+			  (lhtml->text)))
+    :title ((call-sequence html
+			   (lhtml-select :name :div :id "phArticle")
+			   (lhtml-select :name :h1)
+			   (lhtml->text))))
+
+(def-media-fetcher (fetch-dn.se-front-page
+		    fetch-dn.se-article
+		    "http://www.dn.se"
+		    :source-name "Dagens Nyheter"
+		    :url-regex "^(?:/[a-z\\-]+/)+-?-?[a-z]+-[a-z\\-]+$"
+		    :url-prefix t
+		    :language :swedish)
+    :title ((call-sequence html
+			   (lhtml-select :name :div :id "article-content")
+			   (lhtml-select :name :h1)
+			   (lhtml->text)))
+    :text ((call-sequence html
+			  (lhtml-select :name :div :id "article-content")
+			  (lhtml-select :name :div :class "preamble")
+			  (lhtml->text))
+	   (call-sequence html
+			  (lhtml-filter :name :div :class "advert-space")
+			  (lhtml-select :name :div :id "article-content")
+			  (lhtml-select :name :div :id "contentBody")
+			  (lhtml->text)))
+    :author ((call-sequence html
+			    (lhtml-select :name :div :id "article-content")
+			    (lhtml-select :name :div :class "byline")
+			    (lhtml-select :name :strong)
+			    (lhtml->text))))
+    
+(def-media-fetcher (fetch-dagen.se-front-page
+		    fetch-dagen.se-article
+		    "http://www.dagen.se/Nyheter/"
+		    :url-regex "^http://www.dagen.se/\\w+/[a-z\\-]+/$"
+		    :source-name "Dagen"
+		    :language :swedish)
+    :author ((call-sequence html
+			    (lhtml-select :name :div :class "articleByline")
+			    (lhtml-select :name :p :class "fullname")
+			    (lhtml->text)))
+    :published ((call-sequence html
+			    (lhtml-select :name :div :class "articleByline")
+			    (lhtml-select :name :div :class "date")
+			    (lhtml-select :name :p :class "published")
+			    (lhtml->text)
+			    (select-substring "Publicerat:\\s+([0-9\\-]+)")))
+    :updated ((call-sequence html
+			     (lhtml-select :name :div :class "articleByline")
+			     (lhtml-select :name :div :class "date")
+			     (lhtml-select :name :p :class "updated")
+			     (lhtml->text)
+			     (select-substring "Uppdaterat:\\s+([0-9\\-]+)")))
+    :title ((call-sequence html
+			   (lhtml-select :name :div :class "article")
+			   (lhtml-select :name :header)
+			   (lhtml-select :name :h1)
+			   (lhtml->text)))
+    :text ((call-sequence html
+			  (lhtml-select :name :div :class "article")
+			  (lhtml-select :name :header)
+			  (lhtml-select :name :p :class "leading")
+			  (lhtml->text))
+	   (call-sequence html
+			  (lhtml-select :name :div :class "articleText")
+			  (lhtml->text))))
+			   
+
+
+

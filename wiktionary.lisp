@@ -97,40 +97,9 @@
 
 (defun fetch-lhtml (url parameters &rest http-request-args)
   (parse-html (apply #'drakma-request
-		     parameters
 		     url
+		     parameters
 		     http-request-args)))
-
-(defun lhtml-matches? (tag &key name id class)
-  (labels ((ok (x) (find x
-			 (split-sequence #\space (cadr (assoc :class (cadr tag))))
-			 :test #'equalp)))
-    (and (or (null name)
-	     (eq (car tag) name))
-	 (or (null id)
-	     (equalp (cadr (assoc :id (cadr tag)))
-		     id))
-	 (or (null class)
-	     (if (listp class)
-		 (every #'ok class)
-		 (ok class))))))
-
-(defun lhtml-select (root &key name id class list)
-  (if (or (null root)
-	  (stringp root))
-      nil
-      (do* ((stack (list root))
-	    (current (pop stack) (pop stack))
-	    (matching))
-	   ((null current) (reverse matching))
-	(when (consp current)
-	  (when (lhtml-matches? current :name name :id id :class class)
-	    (when (not list)
-	      (return-from lhtml-select current))
-	    (push current matching))
-	  (dolist (tag (cddr current))
-	    (push tag stack))))))
-  
 	
 (defun fetch-example-site (&optional (url "http://sv.wiktionary.org/wiki/katt"))
   (fetch-lhtml url nil))
