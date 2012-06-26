@@ -33,7 +33,8 @@
 	      type-string
 	      (if origin ":" "")
 	      (or origin-string "")
-	      core-text))
+	      core-text)
+      (force-output))
     (when (matches-types? type *types-to-irc*)
       (irc-report (format nil
 			  "[~a] ~a"

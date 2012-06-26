@@ -210,9 +210,7 @@
 			    (heap-node-priority (heap-root heap)))))
       (return-from pop-from-heap nil))
     (let ((return-value (heap-root heap)))
-      #+fdjsk
-      (setf (aref (heap-nodes heap) 0)
-	    (aref (heap-nodes heap) (decf (heap-number-of-nodes heap))))
+      (setf (aref (heap-nodes heap) 0) nil)
       (do* ((index (decf (heap-number-of-nodes heap)))
 	    (best-child-index 0
 			      (if (compare-priority heap

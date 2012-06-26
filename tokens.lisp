@@ -42,7 +42,7 @@
 	(cons sentence (tokens->sentences rest :key key)))))
 
 (defparameter *token-patterns* '(("\\w+" :TOKEN)
-				 ("(:?\\w+[\\.'])+\\w+" :TOKEN)
+				 ("(:?\\w+[\\.':])+\\w+" :TOKEN)
 				 ("((?:[a-z]+)://[\\w\\d:#@%/;$()~_?\+\\-=\\\.&]+)" :TOKEN)
 				 ("(:?[0-9]+[ \\,\\.])*[0-9]+" :TOKEN)
 				 ("\\s+" :WHITESPACE)

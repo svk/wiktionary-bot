@@ -63,13 +63,13 @@
 			  :stream index-file)
 		   (write-char #\newline index-file)
 		   (incf pages-processed)
-		   (when (zerop (mod pages-processed 1000))
-		     (format t
-			     "[index-dump] ~a pages processed, indexing ~a into ~a/~a~%"
-			     pages-processed
-			     pathname
-			     index-filename
-			     parsed-filename)))))))))
+		   (when (zerop (mod pages-processed 10000))
+		     (log-detail 'index-dump
+				 "~a pages processed, indexing ~a into ~a/~a"
+				 pages-processed
+				 pathname
+				 index-filename
+				 parsed-filename)))))))))
 
 (defun open-indexed-dump (data-file-name index-file-name &key (sanitize t))
   (make-indexed-dump :stream
@@ -88,7 +88,9 @@
 				  (setf (gethash title ht)
 					(list position namespace)))
 			    :do (when (zerop (mod i 1000))
-				  (format t "[open-indexed-dump] ~a pages processed~%" i))))
+				  (log-detail 'open-indexed-dump
+					      "~a pages processed"
+					      i))))
 		       ht)))
 
 (defun close-indexed-dump (dump)

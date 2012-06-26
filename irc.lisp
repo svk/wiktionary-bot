@@ -98,6 +98,9 @@
 			 (extract '(:userid) entry)
 			 (extract '(:editcount) entry)))))
 
+(defun-irc report-tasks ()
+  (irc-reply-format "~a" (heap-values *task-pq*)))
+
 (define-condition irc-command-error (error)
   ((text :reader text :initarg :text)))
 
@@ -167,24 +170,26 @@
 
 (defun-irc irc-input (message)
   (in-package :wiktionary-bot)
-  (let* ((source-host (cl-irc:host message))
-	 (source-nick (cl-irc:source message))
-	 (target (first (cl-irc:arguments message)))
-	 (text (second (cl-irc:arguments message)))
-	 (connection  (cl-irc:connection message))
-	 (target-user (cl-irc:find-user connection target))
-	 (private? (equal target (cl-irc:nickname (cl-irc:user connection))))
-	 (*reply-target* (if private?
-			     source-nick
-			     target)))
-    (ignore-errors (let ((sexps (parse-irc-input text)))
-		     (dolist (sexp sexps)
-		       (when sexp
-			 (let ((*source-nick* source-nick)
-			       (*source-host* source-host)
-			       (*source-channel* (if private? nil target)))
-			   (irc-do sexp))))
-		     sexps))))
+  (schedule #'(lambda ()
+		(let* ((source-host (cl-irc:host message))
+		       (source-nick (cl-irc:source message))
+		       (target (first (cl-irc:arguments message)))
+		       (text (second (cl-irc:arguments message)))
+		       (connection  (cl-irc:connection message))
+		       (target-user (cl-irc:find-user connection target))
+		       (private? (equal target (cl-irc:nickname (cl-irc:user connection))))
+		       (*reply-target* (if private?
+					   source-nick
+					   target)))
+		  (ignore-errors (let ((sexps (parse-irc-input text)))
+				   (dolist (sexp sexps)
+				     (when sexp
+				       (let ((*source-nick* source-nick)
+					     (*source-host* source-host)
+					     (*source-channel* (if private? nil target)))
+					 (irc-do sexp))))
+				   sexps))))
+	    0))
 
 (defun-irc irc-input-base (message) (irc-input message))
 
@@ -231,9 +236,9 @@
 		       (number-of-articles))))
 
 
-(defparameter *irc-line-length* 160)
+(defparameter *irc-line-length* 400)
 
-(defparameter *irc-split-suffix* "…")
+(defparameter *irc-split-suffix* "")
 (defparameter *irc-split-prefix* "    ")
 
 (defun-irc %irc-split-line (text &optional prefix)
@@ -253,7 +258,7 @@
   (irc-report (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
 (defun-irc irc-report (message)
-  (dolist (message (irc-split-line message))
+  (dolist (message (reverse (irc-split-line message)))
     (irc-privmsg *irc-report-channel*
 		 message)))
 
@@ -261,6 +266,6 @@
   (irc-reply (let ((*print-pretty* nil)) (apply #'format nil message args))))
 
 (defun-irc irc-reply (message)
-  (dolist (message (irc-split-line message))
+  (dolist (message (reverse (irc-split-line message)))
     (irc-privmsg *reply-target*
 		 message)))

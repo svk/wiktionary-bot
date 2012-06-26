@@ -184,7 +184,7 @@
 					candidates))))
     (dolist (candidate candidates)
       (when (find inflected-word
-		  (links-from-table-cell (scan-for-grammar-tables (swedish-grammar-table-regexes)
+		  (links-from-table-cell (scan-for-grammar-tables (swedish-blessed-grammar-templates)
 								  candidate
 								  :early-warning nil
 								  :fully-live t))

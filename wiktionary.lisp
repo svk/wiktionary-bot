@@ -345,7 +345,43 @@
     (parse-simple-bullet-list
      (expand-templates "{{Wiktionary:Användare/Robotar/Godkända_grammatikmallar}}"))))       
 
-(defun create-regexes-from-template-names (template-names)
+(defun top-level-templates (haystack &key filter)
+  (let ((needle (cl-ppcre:create-scanner "(?:\\{\\{([^\\|\\{||} ]+)|\\}\\})"))
+	(begin-regex (cl-ppcre:create-scanner "^\\{\\{"))
+	(index 0)
+	(current-begin)
+	(current-name)
+	(depth 0)
+	(collect? (cond ((functionp filter) filter)
+			((null filter) (constantly t))
+			((stringp filter) (let ((m (cl-ppcre:create-scanner filter)))
+					    #'(lambda (string) (cl-ppcre:scan m string))))
+			((listp filter) (papply (find ? filter :test #'equal)))
+			(t (error (format nil "unknown filter type ~a" filter))))))
+    (collecting
+      (loop
+	 :do
+	 (multiple-value-bind (begin end group-begins group-ends)
+	     (cl-ppcre:scan needle haystack :start index)
+	   (unless begin
+	     (return))
+	   (setf index end)
+	   (if (not (cl-ppcre:scan begin-regex haystack :start begin))
+	       (unless (zerop depth)
+		 (when (zerop (decf depth))
+		   (when (funcall collect? current-name)
+		     (collect (list current-name
+				    (subseq haystack
+					    current-begin
+					    end))))))
+	       (progn (incf depth)
+		      (setf current-name (subseq haystack
+						 (aref group-begins 0)
+						 (aref group-ends 0)))
+		      (setf current-begin begin))))))))
+
+#+harmful					      
+(defun create-regexes-from-template-names (template-names &key (no-compile t))
   (loop
      :for template-name :in template-names
      :collect
@@ -357,15 +393,18 @@
 				 template-name
 				 "\\\\\\1")
 				"(|.*?)*?}}")))
-	(cl-ppcre:create-scanner regex))
+	(if no-compile
+	    regex
+	    (cl-ppcre:create-scanner regex)))
       (concatenate 'string
 		   "template-"
 		   template-name))))
 
+#+harmful
 (def-simple-cached swedish-grammar-table-regexes
   (create-regexes-from-template-names (swedish-blessed-grammar-templates)))
 
-(defun scan-for-grammar-tables (regex-list page &key double-check fully-live early-warning)
+(defun scan-for-grammar-tables (template-name-list page &key double-check fully-live early-warning)
   (when (and early-warning
 	     (swedish-dump-text page)
 	     (or (swedish-dump-text (concatenate 'string page "en"))
@@ -383,13 +422,14 @@
 	  (temporary-error :edited-during-scan page))))
     (when (and before rendered)
       (collecting 
-	(dolist (element regex-list)
-	  (destructuring-bind (scanner class)
-	      element
-	    (when (cl-ppcre:scan scanner before)
-	      (let ((tables (lhtml-select rendered :name :table :class (list class "grammar") :list t)))
-		(when (eql (length tables) 1)
-		  (collect (car tables)))))))))))
+	(dolist (template-name template-name-list)
+	  (when (top-level-templates before :filter (list template-name))
+	    (let ((tables (lhtml-select rendered :name :table :class (list (concatenate 'string
+											"template-"
+											template-name)
+									   "grammar") :list t)))
+	      (when (eql (length tables) 1)
+		(collect (car tables))))))))))
 
 (defun layout-table (table)
   (let ((no-cols)

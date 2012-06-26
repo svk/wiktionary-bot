@@ -13,11 +13,10 @@
 (defparameter *web-resource-cache-urls* #p"./data/web-resources-cache-urls.generated.lisp")
 (defparameter *web-resource-cache-template* "./data/web-resources-cache/wrcache-~a.generated.lisp")
 
-(defparameter *web-resource-cache-memory-limit* 100)
+(defparameter *web-resource-cache-memory-limit* 200)
 (defparameter *web-resource-quiet* nil)
 
-
-(defparameter *article-fetchers* nil)
+(defparameter *web-resource-crawlers* nil)
 
 (defparameter *front-page-fetchers* nil)
 
@@ -158,24 +157,42 @@
   (remove-if-not #'web-resource-valid?
 		 (hash-table-values *web-resource-cache*)))
 
+
+(defun-web web-resource-is-cached? (url)
+  (or (gethash url *web-resource-cache*)
+      (gethash url *urls-cached-on-disk*)))
+    
+
 (defun-web fetch-cached-web-resource (url)
   (or (gethash url *web-resource-cache*)
       (retrieve-from-disk-cache url)))
 
-(defun-web fetch-web-resource (fetcher url)
+(defun-web fetch-web-resource (fetcher url &key crawl)
   (or (values (fetch-cached-web-resource url)
 	      nil)
-      (let ((result (setf (gethash url *web-resource-cache*)
-			  (funcall fetcher url))))
-	(unless *web-resource-quiet*
-	  (log-info 'fetch-web-resource
-		    "fetched ~a"
-		    url))
-	(when (>= (hash-table-count *web-resource-cache*)
-		  *web-resource-cache-memory-limit*)
-	  (flush-web-resource-cache-to-disk))
-	(values result
-		t))))
+      (handler-case
+	  (let ((result (setf (gethash url *web-resource-cache*)
+			      (funcall fetcher url :crawl crawl))))
+	    (unless *web-resource-quiet*
+	      (log-detail 'fetch-web-resource
+			  "fetched ~a"
+			  url))
+	    (when (>= (hash-table-count *web-resource-cache*)
+		      *web-resource-cache-memory-limit*)
+	      (flush-web-resource-cache-to-disk))
+	    (values result
+		    t))
+	(usocket:timeout-error (condition)
+	  (log-error 'fetch-web-resource
+		     "timeout on ~a fetching ~a: ~a"
+		     fetcher
+		     url
+		     condition)
+	  nil))))
+		     
+		     
+	  
+      
 
 (defun-web filter-many (html argss)
   (dolist (args argss)
@@ -206,8 +223,13 @@
 						   (cl-ppcre:split newline-regex string))
 					       strings))))))
 
-(defmacro def-media-fetcher ((front-page-function
-			      article-function
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun concatenate-symbols (&rest symbols)
+    (intern (apply #'concatenate
+		   'string
+		   (mapcar #'symbol-name symbols)))))
+
+(defmacro def-media-fetcher ((base-name
 			      base-url
 			      &key
 			      url-regex
@@ -222,67 +244,92 @@
 			     text
 			     published
 			     updated)
-  `(progn
-     (defun-web ,article-function (url)
-       (let* ((raw-html (parse-html (drakma-request url nil)))
-	      (html (filter-nontextual-html raw-html)))
-	 (append (list (cons :source ,source-name)
-		       (cons :language ,language)
-		       (cons :retrieved (get-universal-time))
-		       (cons :url url))
-		 (let ((x (cleanup-whitespace ,@text)))
-		   (when (and x (not (equal "" x)))
-		     (list (cons :text x))))
-		 (let ((x (cleanup-whitespace-single-line ,@author)))
-		   (when (and x (not (equal "" x)))
-		     (list (cons :author x))))
-		 (let ((x (cleanup-whitespace-single-line ,@title)))
-		   (when (and x (not (equal "" x)))
-		     (list (cons :title x))))
-		 (let ((x (cleanup-whitespace-single-line ,@updated)))
-		   (when (and x (not (equal "" x)))
-		     (list (cons :updated x))))
-		 (let ((x (cleanup-whitespace-single-line ,@published)))
-		   (when (and x (not (equal "" x)))
-		     (list (cons :published x)))))))
-     (defun-web ,front-page-function ()
-       (let ((url-type (cl-ppcre:create-scanner ,url-regex)))
-	 (values (remove-duplicates
-		  (collecting
-		    (dolist (entry (lhtml-select (parse-html (drakma-request ,base-url nil))
-						 :list t
-						 :name :a))
-		      (destructuring-bind (name attrs . contents)
-			  entry
-			(declare (ignore name contents))
-			(let ((href (second (assoc :href attrs))))
-			  (multiple-value-bind (string groups)
-			      (cl-ppcre:scan-to-strings url-type href)
-			    ,@(when (not use-partial-url)
-				    (list (list 'declare (list 'ignore 'groups))))
-			    (when string
-			      (let ((good-string ,(if use-partial-url
-						      (list 'aref 'groups 0)
-						      'href)))
-				(collect ,(if url-prefix
-					      `(concatenate 'string
-							    ,(if (eq url-prefix t)
-								 base-url
-								 url-prefix)
-							    good-string)
-					      'good-string)))))))))
-		  :test #'equal)
-		 #',article-function
-		 ,language)))
-     ,(if include-as-standard
-	  `(progn (push #',front-page-function *front-page-fetchers*)
-		  (push (cons #',article-function
-			      (cl-ppcre:create-scanner ,url-regex))
-			*article-fetchers*))
-	  nil)))
+  (let ((front-page-function (concatenate-symbols 'fetch- base-name '-front-page))
+	(article-function (concatenate-symbols 'fetch- base-name '-article))
+	(crawl-one-function (concatenate-symbols 'crawl- base-name '-once))
+	(crawl-name (concatenate-symbols '*crawled- base-name '-urls*)))
+    `(let ((url-type (cl-ppcre:create-scanner ,url-regex)))
+       (labels ((process-link (href)
+		  (multiple-value-bind (string groups)
+		      (cl-ppcre:scan-to-strings url-type href)
+		    ,@(when (not use-partial-url)
+			    (list (list 'declare (list 'ignore 'groups))))
+		    (when string
+		      (let ((good-string ,(if use-partial-url
+					      (list 'aref 'groups 0)
+					      'href)))
+			,(if url-prefix
+			     `(concatenate 'string
+					   ,(if (eq url-prefix t)
+						base-url
+						url-prefix)
+					   good-string)
+			     'good-string))))))
+	 (defvar ,crawl-name nil)
+	 (defun-web ,crawl-one-function ()
+	   (if ,crawl-name
+	       (let ((url (pop ,crawl-name)))
+		 (if (web-resource-is-cached? url)
+		     (,crawl-one-function)
+		     (fetch-web-resource #',article-function
+					 url
+					 :crawl t)))
+	       (,front-page-function)))
+	 (defun-web ,article-function (url &key (crawl t))
+	   (let* ((raw-html (parse-html (drakma-request url nil)))
+		  (html (filter-nontextual-html raw-html))
+		  (web-resource (append (list (cons :source ,source-name)
+					      (cons :language ,language)
+					      (cons :retrieved (get-universal-time))
+					      (cons :url url))
+					(let ((x (cleanup-whitespace ,@text)))
+					  (when (and x (not (equal "" x)))
+					    (list (cons :text x))))
+					(let ((x (cleanup-whitespace-single-line ,@author)))
+					  (when (and x (not (equal "" x)))
+					    (list (cons :author x))))
+					(let ((x (cleanup-whitespace-single-line ,@title)))
+					  (when (and x (not (equal "" x)))
+					    (list (cons :title x))))
+					(let ((x (cleanup-whitespace-single-line ,@updated)))
+					  (when (and x (not (equal "" x)))
+					    (list (cons :updated x))))
+					(let ((x (cleanup-whitespace-single-line ,@published)))
+					  (when (and x (not (equal "" x)))
+					    (list (cons :published x)))))))
+	     (when crawl
+	       (loop
+		  :for url :in (call-sequence raw-html
+					      (lhtml-select-list :name :a :href (list 'regex url-type))
+					      (list-map #'(lambda (link)
+							    (process-link (lhtml-attribute link :href)))))
+		  :unless (or (not url)
+			      (web-resource-is-cached? url))
+		  :do (pushnew url ,crawl-name :test #'equal)))
+	     web-resource))
+	 (defun-web ,front-page-function ()
+	   (values (remove-duplicates
+		    (collecting
+		      (dolist (entry (lhtml-select (parse-html (drakma-request ,base-url nil))
+						   :list t
+						   :name :a))
+			(destructuring-bind (name attrs . contents)
+			    entry
+			  (declare (ignore name contents))
+			  (let ((href (process-link (second (assoc :href attrs)))))
+			    (when href
+			      (unless (web-resource-is-cached? href)
+				(pushnew href ,crawl-name :test #'equal))
+			      (collect href))))))
+		    :test #'equal)
+		   #',article-function
+		   ,language))
+	 ,(if include-as-standard
+	      `(progn (push #',front-page-function *front-page-fetchers*)
+		      (push (list #',crawl-one-function ,language) *web-resource-crawlers*))
+	      nil)))))
 				 
-(def-media-fetcher (fetch-gp.se-front-page
-		    fetch-gp.se-article
+(def-media-fetcher (gp.se
 		    "http://www.gp.se"
 		    :url-regex "^/(?:[a-z]+/)*?[0-9]+\\.[0-9]+-[\\w-]+$"
 		    :source-name "Göteborgs-Posten"
@@ -301,8 +348,7 @@
 					      :name :span
 					      :class "name"))))
 
-(def-media-fetcher (fetch-svd.se-front-page
-		    fetch-svd.se-article
+(def-media-fetcher (svd.se
 		    "http://www.svd.se"
 		    :url-regex "^http://www.svd.se/(?:[a-z]+/)+[\\w-]+_[0-9]+\\.svd$"
 		    :source-name "Svenska Dagbladet"
@@ -365,6 +411,27 @@
 			   function
 			   lists))  
 
+(defun make-crawl-continuation (&key (languages '(:swedish)))
+  (let ((crawlers (mapcar #'first (remove-if-not (papply (find ? languages))
+						 *web-resource-crawlers*
+						 :key #'second)))
+	(delay 5.0))
+    #'(lambda (reschedule-continuation done-continuation)
+	(labels ((f (rest)
+		   (if (null rest)
+		       (funcall done-continuation)
+		       (progn (log-detail 'crawl-continuation
+					  "crawling for ~a: ~a"
+					  languages
+					  (car rest))
+			      (funcall (car rest))
+			      (funcall reschedule-continuation
+				       delay
+				       #'(lambda ()
+					   (f (cdr rest))))))))
+	  (f crawlers)))))
+      
+
 (defun make-fetch-from-standard-front-pages-continuation (&key (languages '(:swedish)))
   (make-fetch-from-front-pages-continuation (append *front-page-fetchers*)
 					    :languages languages))
@@ -417,8 +484,7 @@
 		    front-page-fetchers)))
 	(process-fetchers-sideways fetchers))))
 
-(def-media-fetcher (fetch-hbl.fi-front-page
-		    fetch-hbl.fi-article
+(def-media-fetcher (hbl.fi
 		    "http://www.hbl.fi"
 		    :url-regex "^/(?:[\\w]+/)+[0-9]{4}-[0-9]{2}-[0-9]{2}/(?:[\\w-]+)$"
 		    :source-name "Hufvudstadsbladet"
@@ -456,7 +522,7 @@
   (destructuring-bind (tag-name attrs . contents)
       root
     (declare (ignore tag-name contents))
-    (cdr (assoc name attrs))))
+    (cadr (assoc name attrs))))
 
 (defun-web empty? (string)
   (or (null string)
@@ -472,8 +538,7 @@
 	   ,sym
 	   (or-string ,@(cdr forms)))))))
 
-(def-media-fetcher (fetch-guardian.co.uk-front-page
-		    fetch-guardian.co.uk-article
+(def-media-fetcher (guardian.co.uk
 		    "http://www.guardian.co.uk"
 		    :url-regex "^http://www.guardian.co.uk/(?:[a-z]+/)+[0-9]{4}/[a-z]+/[0-9]+/[\\w-]+$"
 		    :source-name "The Guardian"
@@ -497,8 +562,7 @@
 					:name :div
 					:class "contributor-full"))))
 
-(def-media-fetcher (fetch-aftenposten.no-front-page
-		    fetch-aftenposten.no-article
+(def-media-fetcher (aftenposten.no
 		    "http://www.aftenposten.no"
 		    :url-regex "^http://[a-z]+\\.aftenposten.no/(?:[\\w]+/)+[\\w-]+[0-9]+\\.html$"
 		    :source-name "Aftenposten"
@@ -621,6 +685,47 @@
 	      (log-info 'collect-media-loop "sleeping for ~a seconds" interval)
 	      (sleep interval))))
 
+(defun-web corpus-statistics (&key languages)
+  (let ((word-count 0)
+	(sentence-count 0)
+	(article-count 0)
+	(valid-article-count 0)
+	(total-word-length 0))
+    (labels ((process-resource (resource)
+	       (when (web-resource-valid? resource)
+		 (incf valid-article-count))
+	       (incf article-count)
+	       (let* ((sentences (web-resource-unindexed-sentences resource))
+		      (words (flatten sentences)))
+		 (incf sentence-count (length sentences))
+		 (incf word-count (length words))
+		 (incf total-word-length (reduce #'+ words :key #'length))))
+	     (process-resources (resources)
+	       (dolist (resource resources)
+		 (process-resource resource))))
+      (on-all-web-resources #'process-resources :languages languages)
+      (list :words word-count
+	    :sentences sentence-count
+	    :articles article-count
+	    :valid-articles valid-article-count
+	    :total-word-length total-word-length))))
+	
+
+(defun make-language-filter (languages)
+  #'(lambda (web-resource)
+      (or (null languages)
+	  (find (extract '(:language) web-resource) languages))))
+
+(defun-web on-all-web-resources (process-bunch &key languages)
+  (let ((language-filter (make-language-filter languages)))
+    (funcall process-bunch (remove-if-not language-filter
+					  (hash-table-values *web-resource-cache*)))
+    (dolist (filename (remove-duplicates (hash-table-values *urls-cached-on-disk*)
+					 :test #'equal))
+      (funcall process-bunch (remove-if-not language-filter
+					    (mapcar #'cdr (list-in-file filename)))))))
+    
+
 (defun-web all-web-resources ()
   (append (hash-table-values *web-resource-cache*)
 	  (maphash-to-unordered-list
@@ -655,6 +760,7 @@
 	       #'(lambda ()
 		   (process-next-in-memory in-memory))))))
 
+#+fjdks
 (defun on-all-web-resources (function)
   (let ((result-value)
 	(result-p))
@@ -682,6 +788,9 @@
 	     element)
   element)
 
+(defun list-map (sequence function)
+  (mapcar function sequence))
+
 (defun one-matching (sequence predicate &key key)
   (let ((rv (remove-if-not predicate sequence :key key)))
     (if (eql (length rv) 1)
@@ -701,10 +810,9 @@
 (defun first-containing-text (sequence text)
   (first-matching sequence (text-contains-predicate text)))
 
-(def-media-fetcher (fetch-sydsvenskan.se-front-page
-		    fetch-sydsvenskan.se-article
+(def-media-fetcher (sydsvenskan.se
 		    "http://www.sydsvenskan.se"
-		    :url-regex "^/[a-z\\-]+/[a-z\\-]+$"
+		    :url-regex "^/(?!taggar/)[a-z\\-]+/[a-z\\-]+$"
 		    :url-prefix t
 		    :language :swedish
 		    :source-name "Sydsvenska Dagbladet Snällposten")
@@ -740,8 +848,7 @@
 			    (lhtml->text)
 			    (select-substring "Uppdaterad ([0-9]+ \\w+ [0-9]+ [0-9]{2}\\.[0-9]{2})"))))
 
-(def-media-fetcher (fetch-di.se-front-page
-		    fetch-di.se-article
+(def-media-fetcher (di.se
 		    "http://di.se/Nyheter/"
 		    :url-regex "^(/\\w+/[0-9]{4}/[0-9]{1,2}/[0-9]{1,2}/[0-9]+/[\\w-]+/)\\?.*$"
 		    :source-name "Dagens Industri"
@@ -766,11 +873,10 @@
 			   (lhtml-select :name :h1)
 			   (lhtml->text))))
 
-(def-media-fetcher (fetch-dn.se-front-page
-		    fetch-dn.se-article
+(def-media-fetcher (dn.se
 		    "http://www.dn.se"
 		    :source-name "Dagens Nyheter"
-		    :url-regex "^(?:/[a-z\\-]+/)+-?-?[a-z]+-[a-z\\-]+$"
+		    :url-regex "^/(?:[a-z\\-]+/)+-?-?[a-z]+-[a-z\\-]+$"
 		    :url-prefix t
 		    :language :swedish)
     :title ((call-sequence html
@@ -792,10 +898,9 @@
 			    (lhtml-select :name :strong)
 			    (lhtml->text))))
     
-(def-media-fetcher (fetch-dagen.se-front-page
-		    fetch-dagen.se-article
+(def-media-fetcher (dagen.se
 		    "http://www.dagen.se/Nyheter/"
-		    :url-regex "^http://www.dagen.se/\\w+/[a-z\\-]+/$"
+		    :url-regex "^http://www.dagen.se/(?:\\w+/)+[a-z\\-]+/$"
 		    :source-name "Dagen"
 		    :language :swedish)
     :author ((call-sequence html

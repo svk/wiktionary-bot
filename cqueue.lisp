@@ -1,7 +1,11 @@
 (in-package :wiktionary-bot)
 
-(defparameter *task-pq* (create-heap))
+(defvar *task-pq* (create-heap))
 (defparameter *timer-resolution* 1.0)
+
+(defstruct task
+  continuation
+  description)
 
 (defun clear-task-queue ()
   (clear-heap *task-pq*))
@@ -16,13 +20,19 @@
 (defun idle-task ()
   (sleep *timer-resolution*))
 
+(defun task-is-idle? (task)
+  (eq #'idle-task task))
+
 (defun run-task-queue ()
   (let ((queued-tasks))
     (loop
        :do (let ((task (or (pop queued-tasks)
 			   (pop-from-heap *task-pq* :priority-limit (get-universal-time))
 			   #'idle-task)))
-	     (restart-case (funcall task)
+	     (restart-case (progn (unless (task-is-idle? (log-detail 'run-task-queue
+								     "running task ~a"
+								     task)))
+				  (funcall task))
 	       (delay-task ()
 		 :report (lambda (stream)
 			   (format stream "Reschedule task ~a with delay" task))
@@ -51,6 +61,11 @@
 	  (kill-task-queue)
 	  (return-from start-task-queue nil)))
     (setf *task-queue-process* (mp:process-run-function "task queue" #'run-task-queue))))
+
+(defun stop-all-tasks ()
+  (with-lock *task-queue-process-lock*
+    (kill-task-queue)
+    (clear-task-queue)))
 
 (defun run-continuation-task (task &key repeat-interval)
   (labels ((repeat-or-stop ()

@@ -48,7 +48,7 @@
 		delay)))
 
 (defun-task
-    (start-emergency-page-task (&key (interval 60))
+    (start-emergency-page-task (&key (interval (* 3 60)))
       (log-info 'emergency-page-task
 		"checking for emergency stop, next in ~a seconds"
 		interval)
@@ -60,6 +60,21 @@
 (defun start-collect-media-task (&key (languages '(:swedish)) (interval (* 60 30)))
   (run-continuation-task (make-fetch-from-standard-front-pages-continuation :languages languages)
 			 :repeat-interval interval))
+
+(defun start-conjugation-tasks ()
+  (run-continuation-task (make-perform-collected-conjugation-tasks-continuation)
+			 :repeat-interval 60)
+  (run-continuation-task (make-scan-rc-for-conjugation-tasks-continuation
+			  :delay-between-scans (* 5 60)))
+  (run-continuation-task (make-scan-dumps-for-conjugation-tasks-continuation)
+			 :repeat-interval (* 10 60)))
+
+(defun start-standard-tasks ()
+  (start-emergency-page-task)
+  (start-collect-media-task)
+  (run-continuation-task (make-crawl-continuation)
+			 :repeat-interval 60)
+  (start-conjugation-tasks))
 
 #+fdjsk									
 (defun-task
