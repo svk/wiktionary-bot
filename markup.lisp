@@ -318,3 +318,156 @@
 	       (mapcar #'trim
 		       (cl-ppcre:split boundary-regex (parsed-wikitext->text wt)))
 	       :key #'length)))
+
+(defun all-matches (regex text)
+		  (do ((regex (if (stringp regex)
+				  (cl-ppcre:create-scanner regex)
+				  regex))
+		       (rv)
+		       (index 0)
+		       (text-length (length text)))
+		      ((>= index text-length)
+		       (reverse rv))
+		    (multiple-value-bind (begin end)
+			(cl-ppcre:scan regex text :start index)
+		      (when begin
+			(push (list begin end) rv))
+		      (setf index (or end
+				      text-length)))))
+
+(let ((regex (cl-ppcre:create-scanner "(?=[^\\n])=+[^=]+=+(?=\\s*\\n)"))
+      (headline-regex (cl-ppcre:create-scanner "^(=+)([^=]+)(=+)$")))
+  (defun find-all-headlines-flat (wikitext)
+    (remove-if-not #'identity
+		   (mapcar #'(lambda (indices)
+			       (let ((string (trim (apply #'subseq wikitext indices))))
+				 (multiple-value-bind (full-match groups)
+				     (cl-ppcre:scan-to-strings headline-regex string)
+				   (when (and full-match
+					      (eql (length (aref groups 0))
+						   (length (aref groups 2))))
+				     (append indices
+					     (list (aref groups 1)
+						   (length (aref groups 0))))))))
+			   (all-matches regex wikitext)))))
+
+(defun get-direct-contents (wikitext matches)
+  (when matches
+    (cons (append (car matches)
+		  (list (if (null (cdr matches))
+			    (subseq wikitext (second (car matches)))
+			  (subseq wikitext (second (car matches)) (first (cadr matches))))
+			(second (car matches))
+			(if (null (cdr matches))
+			    (length wikitext)
+			    (first (cadr matches)))))
+	  (get-direct-contents wikitext (cdr matches)))))
+
+(defun make-dummy-headline (level)
+  (list nil nil
+	nil
+	level
+	nil))
+
+(defun get-direct-contents+intro (wikitext matches)
+  (cons (list nil nil
+	      nil
+	      0
+	      (subseq wikitext 0 (if matches
+				     (caar matches)
+				     nil)))
+	(get-direct-contents wikitext matches)))
+
+(defun interpose-dummy-headlines! (list)
+  (if (< (length list) 2)
+      list
+      (do ((alpha list)
+	   (beta (cdr list))
+	   (rest (cddr list)))
+	  ((null beta) list)
+	(if (> (headline-entry-level (car beta)) (1+ (headline-entry-level (car alpha))))
+	    (setf alpha
+		  (setf (cdr alpha)
+			(cons (make-dummy-headline (1+ (headline-entry-level (car alpha)))) beta)))
+	    (setf alpha beta
+		  beta rest
+		  rest (cdr rest))))))
+
+(defun headline-entry-name (x) (third x))
+(defun headline-entry-level (x) (fourth x))
+(defun headline-entry-direct-contents (x) (fifth x))
+ 
+(defun take-until (predicate list)
+  (let ((selected (collecting
+		    (do ((rest list (cdr rest)))
+			((or (null rest)
+			     (funcall predicate (car rest)))
+			 (setf list rest))
+		      (collect (car rest))))))
+    (values selected list)))
+
+(defun negation-of-predicate (predicate)
+  #'(lambda (&rest args) (not (apply predicate args))))
+
+(defun take-while (predicate list)
+  (take-until (negation-of-predicate predicate)
+	      list))
+
+(defun split-sequence-at-heads (predicate list &optional acc)
+  (if (null list)
+      (reverse (mapcar #'reverse acc))
+      (split-sequence-at-heads predicate
+			       (cdr list)
+			       (if (funcall predicate (car list))
+				   (cons (cons (car list) nil) acc)
+				   (progn (push (car list) (car acc))
+					  acc)))))
+
+(defun unflatten-headlines (list)
+  (destructuring-bind (head . children)
+      list
+    (nconc (list (headline-entry-name head))
+	   (unless (or (not (headline-entry-direct-contents head))
+		       (equal "" (headline-entry-direct-contents head)))
+	     (list (headline-entry-direct-contents head)))
+	   (remove-if-not #'identity
+			  (mapcar #'unflatten-headlines
+				  (split-sequence-at-heads #'(lambda (entry)
+							       (= (1+ (headline-entry-level head))
+								  (headline-entry-level entry)))
+							   children))))))
+
+(defun structure-wikitext (wikitext)
+  (unflatten-headlines (interpose-dummy-headlines! (get-direct-contents+intro wikitext (find-all-headlines-flat wikitext)))))
+
+(defun headlines-from-structure (structure)
+  (cons (car structure)
+	(mapcar #'headlines-from-structure (remove-if-not #'consp (cdr structure)))))
+
+(defun headline-structure (wikitext)
+  (headlines-from-structure (structure-wikitext wikitext)))
+
+
+(defun %select-section (section-specifier structure)
+  (if (null section-specifier)
+      (values structure t)
+      (%select-section
+       (cdr section-specifier)
+       (or (find-if #'(lambda (key) (equal key (car section-specifier)))
+		    (remove-if-not #'consp (cdr structure))
+		    :key #'car)
+	   (return-from %select-section (values nil nil))))))
+
+(defun select-section (section-specifier structure)
+  (multiple-value-bind (elements present-p)
+      (%select-section section-specifier structure)
+    (values (cdr elements) present-p)))
+
+(defun select-section-text (section-specifier structure)
+  (multiple-value-bind (elements present-p)
+      (select-section section-specifier structure)
+    (if present-p
+	(values (first (merge-adjacent-strings elements)) t)
+	(values "" nil))))
+
+      

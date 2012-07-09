@@ -87,7 +87,7 @@
 (def-table-recognizer parse-swedish-noun-uncountable-table
     #'links-from-table-cell
   (("Böjningar" "Oräknebart" "Oräknebart")
-   ("neutrum" "Obestämd" "Bestämd")
+   ("utrum" "Obestämd" "Bestämd")
    ("Nominativ" (:nominative :uncountable :indefinite)
 		(:nominative :uncountable :definite))
    ("Genitiv" (:genitive :uncountable :indefinite)
@@ -97,7 +97,7 @@
     #'links-from-table-cell
   (("Böjningar" "Böjningar" "Positiv" "Komparativ" "Superlativ")
    ("Böjningar" "Böjningar" "Attributivt" "Attributivt" "Attributivt")
-   ("Obestämd" "Utrum"
+   ("Obestämd" "trum"
 	       (:positive :utrum :indefinite :singular)
 	       (:comparative :utrum :indefinite :singular)
 	       (:superlative :utrum :indefinite :singular))

@@ -41,13 +41,13 @@
 	  (tokens->sentence tokens :key key)
 	(cons sentence (tokens->sentences rest :key key)))))
 
-(defparameter *token-patterns* '(("\\w+" :TOKEN)
+(defparameter *token-patterns* '(("\\p{L}+" :TOKEN)
 				 ("(:?\\w+[\\.':])+\\w+" :TOKEN)
 				 ("((?:[a-z]+)://[\\w\\d:#@%/;$()~_?\+\\-=\\\.&]+)" :TOKEN)
 				 ("(:?[0-9]+[ \\,\\.])*[0-9]+" :TOKEN)
-				 ("\\s+" :WHITESPACE)
-				 ("[\\.\\?\\(\\)\\[\\]\\:\\,\\;\\-\\–\\…]" :TOKEN)
-				 ("\\W" :TOKEN)))
+				 ("\\p{Z}+" :WHITESPACE)
+				 ("[\\.\\?\\(\\)\\[\\]\\:\\,\\;\\-\\–\\…\\”]" :TOKEN)
+				 ("[^\\p{L}\\p{Z}0-9]" :TOKEN)))
 
 (defun %argmax (f seq &optional acc acc-score)
   (if (null seq)

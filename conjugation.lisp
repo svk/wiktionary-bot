@@ -254,7 +254,7 @@
 	    :createonly t
 	    :minor t
 	    :append (swedish-new-conjugated-form-page base-word type))
-  (log-info 'edit-conjugation-taks
+  (log-info 'edit-conjugation-task
 	    "created ~a (conjugation of ~a)"
 	    conjugated-word base-word))
 
@@ -378,3 +378,9 @@
     :sample n
     :criterion #'(lambda (title) (not (in-conjugation-check-log? title))))))
 				      
+
+(defun correct-conjugation (&rest words)
+  (dolist (word words)
+    (remhash word *conjugation-checked-pages*))
+  (collect-conjugation-tasks words)
+  (perform-collected-conjugation-tasks))

@@ -73,7 +73,7 @@
   (start-emergency-page-task)
   (start-collect-media-task)
   (run-continuation-task (make-crawl-continuation)
-			 :repeat-interval 60)
+			 :repeat-interval 15)
   (start-conjugation-tasks))
 
 #+fdjsk									

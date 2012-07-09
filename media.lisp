@@ -13,7 +13,7 @@
 (defparameter *web-resource-cache-urls* #p"./data/web-resources-cache-urls.generated.lisp")
 (defparameter *web-resource-cache-template* "./data/web-resources-cache/wrcache-~a.generated.lisp")
 
-(defparameter *web-resource-cache-memory-limit* 200)
+(defparameter *web-resource-cache-memory-limit* 100)
 (defparameter *web-resource-quiet* nil)
 
 (defparameter *web-resource-crawlers* nil)
@@ -174,9 +174,9 @@
 	  (let ((result (setf (gethash url *web-resource-cache*)
 			      (funcall fetcher url :crawl crawl))))
 	    (unless *web-resource-quiet*
-	      (log-detail 'fetch-web-resource
-			  "fetched ~a"
-			  url))
+	      (log-info 'fetch-web-resource
+			"fetched ~a"
+			url))
 	    (when (>= (hash-table-count *web-resource-cache*)
 		      *web-resource-cache-memory-limit*)
 	      (flush-web-resource-cache-to-disk))
@@ -932,7 +932,12 @@
 	   (call-sequence html
 			  (lhtml-select :name :div :class "articleText")
 			  (lhtml->text))))
-			   
+
+(defun web-resource-id (url)
+  (concatenate 'string
+	       "web-resource"
+	       ":"
+	       url))
 
 
 

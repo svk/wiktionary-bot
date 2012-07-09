@@ -139,7 +139,7 @@
 (def-indexed-dump *swedish-indexed-dump*
     #p"./data/swedish-dump.data"
     #p"./data/swedish-dump.index"
-    #p"./data/svwiktionary-20120616-pages-meta-current.xml"
+    #p"./data/svwiktionary-20120627-pages-meta-current.xml"
     swedish-indexed-dump
     close-swedish-indexed-dump)
 
@@ -170,7 +170,12 @@
   (indexed-dump-lookup (swedish-indexed-dump) title))
 
 (defun dump-entry-text (entry)
-  (extract '(:revision :text 0) entry))
+  (let ((x (extract '(:revision :text) entry)))
+    (if (null (cdr x))
+	(car x)
+	(apply #'concatenate
+	       'string
+	       x))))
 
 (defun swedish-dump-titles (&key namespace)
   (indexed-dump-titles (swedish-indexed-dump) :namespace namespace))
@@ -190,6 +195,7 @@
     (loop :for title :in titles :do (pushnew (title-category title) categories :test #'equal))
     categories))
 
+#+old
 (let ((surrogate-list (list (cl-unicode:property-symbol "Block:High Private Use Surrogates")
 			    (cl-unicode:property-symbol "Block:High Surrogates")
 			    (cl-unicode:property-symbol "Block:Low Surrogates"))))
@@ -198,8 +204,14 @@
 	       #\?)
 	      (t character))))
 
+#+old
 (defun sanitize-string (string)
   (map 'string #'sanitize-character string))
+
+#-old
+(let ((regex (cl-ppcre:create-scanner "\\p{Surrogate}")))
+  (defun sanitize-string (string)
+    (cl-ppcre:regex-replace-all regex string "?")))
 
 (defun sanitize-all-strings (structure)
   (cond ((consp structure)
@@ -227,3 +239,67 @@
        :for title :in  (swedish-dump-titles :namespace "0")
        :do (setf (gethash (string-upcase title) ht) title))
     ht))
+
+(defun swedish-word-classified-as? (word-or-struct part-of-speech)
+  (multiple-value-bind (text present-p)
+      (select-section-text (list nil "Svenska" part-of-speech)
+			   (if (consp word-or-struct)
+			       word-or-struct
+			       (structure-wikitext (swedish-dump-text word-or-struct))))
+    (declare (ignore text))
+    present-p))
+
+(let ((parts '(("Substantiv" :NOUN)
+	       ("Verb" :VERB)
+	       ("Adjektiv" :ADJECTIVE)
+	       ("Adverb" :ADVERB)
+	       ("Räkneord" :NUMERAL)
+	       ("Preposition" :PREPOSITION)
+	       ("Konjunktion" :CONJUNCTION)
+	       ("Interjektion" :INTERJECTION)
+	       ("Pronomen" :PRONOUN)
+	       ("Artikel" :ARTICLE)
+	       ("Förkortning" :ABBREVIATION)
+	       ("Tecken" :PUNCTUATION)))
+      (hardcoded (make-hash-table :test #'equal)))
+  (dolist (x '("." "!" "?" "!?"))
+    (setf (gethash x hardcoded) (list :SENTENCE-ENDER)))
+  (dolist (x '("," ";" ":"))
+    (setf (gethash x hardcoded) (list :MID-SENTENCE-PUNCTUATION)))
+  (dolist (x '("-" "--" "---" "–"))
+    (setf (gethash x hardcoded) (list :DASH)))
+  (dolist (x '("(" "{" "[" "[[" "{{"))
+    (setf (gethash x hardcoded) (list :OPENING-BRACKET)))
+  (dolist (x '(")" "}" "]" "]]" "}}"))
+    (setf (gethash x hardcoded) (list :CLOSING-BRACKET)))
+  (defun swedish-wiktionary-pos (word)
+    (labels ((f (word)
+	       (or (gethash word hardcoded nil)
+		   (let ((struct (structure-wikitext (swedish-dump-text word))))
+		     (remove-if-not #'identity
+				    (loop :for (part-of-speech symbol) :in parts :if (swedish-word-classified-as? struct part-of-speech) :collect symbol))))))
+      (or (f word)
+	  (f (string-downcase word))
+	  (f (string-upcase word))))))
+	  
+
+(defun with-swedish-wiktionary-pos (word)
+  (cons word (swedish-wiktionary-pos word)))
+   			 
+
+(defun wiktionary-dump-id (article-name &optional (language-code "sv"))
+  (concatenate 'string
+	       "wiktionary"
+	       ":"
+	       language-code
+	       ":"
+	       article-name))
+
+
+(defun wikipedia-dump-id (article-name &optional (language-code "sv"))
+  (concatenate 'string
+	       "wiktionary"
+	       ":"
+	       language-code
+	       ":"
+	       article-name))

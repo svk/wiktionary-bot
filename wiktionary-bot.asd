@@ -6,6 +6,7 @@
 	       #:drakma
 	       #:cl-json
 	       #:cl-ppcre
+	       #:cl-ppcre-unicode
 	       #:rfc3339-timestamp
 	       #:cxml
 	       #:cl-irc
@@ -23,6 +24,7 @@
    (:file "tokens")
    (:file "dumps")
    (:file "tables")
+   (:file "ngram")
    (:file "reverse-inflect")
    (:file "conjugation")
    (:file "media")
